@@ -1,6 +1,8 @@
 # LungScape - Lung CT Segmentation Pipeline
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
+![Logo](images/logo.png)
+
 ## Overview
 
 This pipeline performs comprehensive segmentation of lung structures from chest CT scans, including:
