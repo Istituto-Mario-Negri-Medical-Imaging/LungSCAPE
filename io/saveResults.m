@@ -7,17 +7,17 @@ function saveResults(results, patientData, params)
 %   maps, vessel classification, and processed CT volume in NRRD and MAT formats.
 %
 %   Inputs:
-%       results     - Structure with segmentation results:
-%           .labelMap          - Total label map (uint8)
-%           .vesselClassified  - Vessel diameter classification (uint8)
-%           .segmentsMapSI     - Superior-Inferior regional map (uint8)
-%           .segmentsMapPA     - Posterior-Anterior regional map (uint8)
-%           .segmentsMapLR     - Left-Right regional map (uint8)
-%           .lobesVolume       - Lobe segmentation (uint8)
-%           .distalClass       - Distance classification (uint8)
-%           .ctProcessed       - Filtered CT volume (int16)
-%       patientData - Patient data structure from loadPatientData
-%       params      - Processing parameters structure
+%       results                - Structure with segmentation results:
+%           .labelMap            - Total label map (uint8)
+%           .vesselClassified    - Vessel diameter classification (uint8)
+%           .segmentsMapSI       - Superior-Inferior regional map (uint8)
+%           .segmentsMapPA       - Posterior-Anterior regional map (uint8)
+%           .segmentsMapLR       - Left-Right regional map (uint8)
+%           .lobesVolume         - Lobe segmentation (uint8)
+%           .distalClass         - Distance classification (uint8)
+%           .ctProcessed         - Filtered CT volume (int16)
+%       patientData            - Patient data structure from loadPatientData
+%       params                 - Processing parameters structure
 %
 %   Output Files:
 %       <PatientFolder>/InterimResults/
@@ -29,12 +29,12 @@ function saveResults(results, patientData, params)
 %       0 - Background (outside lungs)
 %       1 - Healthy parenchyma
 %       2 - Ground glass opacity (GGO)
-%       3 - Consolidation
+%       3 - Reticulation/Consolidation
 %       4 - Air trapping/cysts
-%       5 - Small/medium vessels
+%       5 - Vessels
 %       6 - Airways (bronchi)
 %       7 - Trachea
-%       8 - Large vessels
+%       8 - Vessels walls
 %       9 - Airway walls
 %      10 - Trachea walls
 %
