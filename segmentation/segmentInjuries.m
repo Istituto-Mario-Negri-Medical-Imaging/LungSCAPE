@@ -96,7 +96,7 @@ ImSrc = double(imcomplement(ct)) .* (ROI > 0);
 lungblur = imgaussfilt(ImSrc, sigma, 'FilterSize', params.injury.kernelSize);
 roilungs = imgaussfilt(roi, sigma, 'FilterSize', params.injury.kernelSize);
 smooth = lungblur ./ roilungs;
-brightstructures = 255 .* (ImSrc <= (smooth - params.injury.adaptiveThresholdSep));
+brightstructures = 255 .* (ImSrc <= (smooth - params.injury.brightStructuresThreshold));
 brightstructures = uint8(brightstructures .* (ROI > 0));
 
 %% Create opacity maps for brightness mapping
@@ -140,6 +140,10 @@ injury_new = smooth > thr_standard;
 
 %% Combine injury paths
 injury_new = injury_new | injury_new_combing;
+
+% Refine combing mask: keep only regions connected to large injury areas
+injury_new_combing = imreconstruct(bwareaopen(injury_new, ...
+    params.injury.combingRecoMinVol, 8), injury_new_combing, 8);
 
 % Apply ROI mask
 injury_new(roi == 0) = 0;
@@ -198,6 +202,7 @@ ggo = injury & ~dense;
 
 injurySeg.dense = dense;
 injurySeg.ggo = ggo;
+injurySeg.injuryNewCombing = logical(injury_new_combing);
     
 fprintf('    Injury segmentation complete\n');
 

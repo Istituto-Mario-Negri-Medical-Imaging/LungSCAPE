@@ -52,12 +52,6 @@ if params.parallel.useParallel && params.parallel.workers > 0
         [val_row, val_col, val_z] = ind2sub(size(classify), val2change);
         lbl_idx_new(lbl_idx_k) = labelimg(val_row, val_col, val_z);
     end
-
-    % Clean up parallel pool
-    poolobj = gcp('nocreate');
-    if ~isempty(poolobj)
-        delete(poolobj);
-    end
 else
     % Serial processing
     for lbl_idx_k = 1:length(lbl_idx)

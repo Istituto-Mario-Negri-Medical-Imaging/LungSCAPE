@@ -18,6 +18,7 @@ function params = getProcessingParameters(nii)
 %           .thresholds    - Hounsfield Unit thresholds
 %           .air           - Air segmentation parameters
 %           .injury        - Injury segmentation parameters
+%           .airSeg        - Low-attenuation refinement parameters
 %           .airways       - Airway segmentation parameters
 %           .vessels       - Vessel segmentation parameters
 %           .fissures      - Fissure segmentation parameters
@@ -55,6 +56,8 @@ params.lungs.erosionSize = 2;         % Erosion kernel size
 params.thresholds.air = -980;                 % Air threshold for airways/cysts
 params.thresholds.consolidationMin = -300;    % Minimum HU for consolidation
 params.thresholds.ggoMin = -700;              % Minimum HU for GGO
+params.thresholds.healthyMaxHU = -600;        % Max HU for healthy tissue (above → pathological)
+params.thresholds.ggoMaxHU = -200;            % Max HU for GGO (above → dense)
 
 %% Air Segmentation Parameters
 params.air.minSize26 = 16;            % Minimum air region size (26-conn)
@@ -62,6 +65,7 @@ params.air.minSizeInjury26 = 25;      % Min size for injury analysis (26-conn)
 params.air.minSizeInjury8 = 4;        % Min size for injury analysis (8-conn)
 
 %% Injury Segmentation Parameters
+params.injury.brightStructuresThreshold = 200; % Adaptive threshold for initial bright structures detection
 params.injury.adaptiveThresholdSep = 150;     % Adaptive threshold to separate GGO from consolidation
 params.injury.kernelSize = 21;                % Gaussian kernel size for adaptive threshold
 params.injury.peakOffset = 40;                % Offset from histogram peak for threshold
@@ -70,6 +74,7 @@ params.injury.histoMinHU = -970;              % Min HU for histogram analysis
 params.injury.histoMaxHU = -600;              % Max HU for histogram analysis
 params.injury.minSize6 = 35;                  % Min injury size (6-conn)
 params.injury.minSize4 = 16;                  % Min injury size (4-conn)
+params.injury.combingRecoMinVol = 500;        % Min volume for combing reconstruction seed (8-conn)
 
 %% Airway Segmentation Parameters
 params.airways.minVolume = 10;                        % Minimum object volume (voxels)
@@ -79,8 +84,37 @@ params.airways.honeycombing.minDiameter = 3.5;        % Min diameter for honeyco
 params.airways.honeycombing.largeDiameter = 5;        % Large diameter for cyst detection
 params.airways.skelMinBranch = 3;                     % Minimum branch length for skeleton
 params.airways.anisotropyThreshold = 0.90;            % FA threshold for tubular airways
+params.airways.leakage.largeDiameter = 6;             % Large leakage diameter threshold
+params.airways.leakage.dilationSize = 5;              % Dilation size for far region in leakage check
 params.airways.wallMinDistance = 0;                   % Min distance for wall detection
 params.airways.wallMaxDistance = 2;                   % Max distance for wall detection
+
+%% Trachea Segmentation Parameters
+params.trachea.bodyMaskHU = -191;                       % HU threshold for body mask extraction
+params.trachea.intensityThreshold = -850;               % HU threshold for air in trachea
+params.trachea.minRoundness = 0.65;                     % Min roundness (sphericity) for trachea seeds
+params.trachea.minSeedArea = 300;                       % Min area for trachea seed objects
+params.trachea.airwaysMaxHU = -600;                     % Max HU for airway voxels
+params.trachea.minVolumeForSkel = 200;                  % Min volume before skeletonization
+params.trachea.branchMinLength = 15;                    % Min branch length for carina detection
+params.trachea.minFragmentVolume = 150;                 % Fragments smaller than this go to AirSeg
+params.trachea.bronchi.vesselness.scale = 1;            % Vesselness scale for bronchi check
+params.trachea.bronchi.vesselness.tau = 0.7;            % Vesselness tau parameter
+params.trachea.bronchi.vesselness.threshold = 0.9;      % Vesselness threshold
+params.trachea.bronchi.endpointDistance = 6;             % Max distance from airway endpoints
+params.trachea.bronchi.FA = 0.95;                       % FA threshold for bronchi recovery
+params.trachea.bronchi.minRecoverVolume = 30;           % Min volume for recovered bronchi fragments
+params.trachea.bronchi.minVolume18 = 70;                % Min volume for cleanup (18-conn)
+params.trachea.bronchi.minVolume6 = 300;                % Min volume for cleanup (6-conn)
+params.trachea.bronchi.skelMinLength = 70;              % Min skeleton length for length-based check
+params.trachea.bronchi.maxCheckVolume = 1000;           % Max volume for second FA pass
+params.trachea.bronchi.minVesselnessVol = 20;           % Min vesselness candidate volume
+
+%% Low-Attenuation Refinement Parameters (air trapping / emphysema)
+params.airSeg.maxHU = -950;                              % Remove AirSeg voxels above this HU
+params.airSeg.expandHU = -900;                           % HU threshold for AirSeg expansion via injury combing
+params.airSeg.healthyMinVol = 5;                         % Min volume for healthy fragments (8-conn)
+params.airSeg.dilationSize = 2;                          % Dilation disk size for healthy→AirSeg recovery
 
 %% Vessel Segmentation Parameters
 % Jerman vesselness filter
@@ -111,6 +145,12 @@ params.vessels.graph.keepVolume = 15;         % Minimum volume for final vascula
 params.vessels.graph.diameter.small = 2;      % Small vessel diameter threshold
 params.vessels.graph.diameter.main = 2.5;     % Main branch diameter
 
+% Multi-threshold vessel refinement in pathological zones
+params.vessels.pathZone.vesselness85 = 0.85;         % Vesselness threshold for distal consolidation and honeycombing (#0, #2)
+params.vessels.pathZone.vesselness80 = 0.80;         % Vesselness threshold for general consolidation (#3)
+params.vessels.pathZone.midfarDilateSize = 2;        % Dilation for midfar→far reconstruction
+params.vessels.pathZone.farDilateSize = 5;           % Dilation for far_LungsCenter
+
 % Vessel cleaning
 params.vessels.cleaning.injuryRegionVolume = 100;   % Remove small vessels in injury regions
 params.vessels.cleaning.finalMinVolume = 30;        % Remove small fragments in final vessels
@@ -122,20 +162,85 @@ params.vessels.largeVessels.diameter = 8;     % Min diameter for large vessel de
 params.vessels.largeVessels.minLength = 5;    % Min length for large vessel detection
 params.vessels.largeVessels.minVol = 30;      % Min volume for large vessel detection
 
+% Large consolidation reclassification
+params.vessels.largeConsol.minHU = -150;              % HU threshold for dense consolidation
+params.vessels.largeConsol.initMinVol = 10;            % Initial cleanup (8-conn)
+params.vessels.largeConsol.mainMinVol = 300;            % Main large consolidation min vol (26-conn)
+params.vessels.largeConsol.distalMinVol = 50;           % Distal consolidation min vol (26-conn)
+params.vessels.largeConsol.vesselMinVol = 30;           % Vessel-consolidated min vol (8-conn)
+params.vessels.largeConsol.vesselness.scales = 0.5:0.5:1.5;  % Vesselness scales for re-filtering
+params.vessels.largeConsol.vesselness.tau = 0.6;        % Vesselness tau
+params.vessels.largeConsol.vesselness.threshold = 0.87; % Vesselness threshold
+params.vessels.largeConsol.postMinVol = 150;            % Small post-vesselness fragment threshold
+
+% Pre-wall reassignment
+params.vessels.preWall.consolMaxVol = 30;            % Max vol for small consolidation fragments (8-conn)
+params.vessels.preWall.airwaysDist = 3;              % Max distance from airways for wall reassignment
+params.vessels.preWall.airwaysCloseDist = 1;         % Close distance for HU-based airway walls
+params.vessels.preWall.vesselsDist = 2;              % Max distance from vessels for wall reassignment
+params.vessels.preWall.airwayWallHU = -900;          % HU threshold for close airway wall detection
+
+% Last false positives removal
+params.vessels.lastFP.pass1.maxVol = 500;            % Max vol for FA check
+params.vessels.lastFP.pass1.minDiam = 3;             % Min diameter seed
+params.vessels.lastFP.pass1.minArea = 4;             % Min area for seed
+params.vessels.lastFP.pass1.FA = 0.95;               % FA threshold
+params.vessels.lastFP.pass2.maxVol = 70;             % Max vol for volume+diameter check
+params.vessels.lastFP.pass2.minDiam = 3;             % Min diameter seed
+params.vessels.lastFP.distal.minDiam = 3;            % Min diameter for distal segregated
+params.vessels.lastFP.distal.minArea = 3;            % Min area for distal seed
+
 % Wall segmentation
 params.vessels.wallMinDistance = 0;           % Min distance for wall detection
 params.vessels.wallMaxDistance = 2;           % Max distance for wall detection
 
-%% Fissure Segmentation Parameters
-params.fissures.scales = [0.5, 1.0];          % Scales for vesselness filter (thin sheets)
-params.fissures.tau = 0.5;                    % Vesselness tau parameter
-params.fissures.vesselnessThreshold = 0.3;    % Min vesselness for fissure candidates
-params.fissures.vesselnessMaxThreshold = 0.8; % Max vesselness (exclude strong tubular)
-params.fissures.minHU = -950;                 % Min HU for fissures (air-like)
-params.fissures.maxHU = -700;                 % Max HU for fissures
-params.fissures.maxDistanceToBoundary = 5;    % Max distance to lobe boundary
-params.fissures.minSize = 5000;               % Min fissure size (from ORIGINAL.m line 393)
-params.fissures.dilationSize = 2;             % Dilation disk size (from ORIGINAL.m line 392)
+% Last corrections - progressive leakage detection
+params.vessels.lastCorr.fissureMaxVol = 1000;         % Max vol for fissure cleaning
+params.vessels.lastCorr.outBordersDilate = 9;         % Dilation disk for distal region
+params.vessels.lastCorr.outBorders2Dilate = 12;       % Dilation disk for external boundary
+params.vessels.lastCorr.skelMinBranch = 5;            % Min branch length for diameter skeleton
+params.vessels.lastCorr.bsapxMinVol = 7000;           % Min volume for base/apex detection
+% Pass 0: small disconnected objects in distal region
+params.vessels.lastCorr.pass0.maxVol = 1000;          % Max object volume
+params.vessels.lastCorr.pass0.minDiam = 3;            % Min diameter for leakage seed
+params.vessels.lastCorr.pass0.minArea = 5;            % Min area for leakage seed
+% Pass 1: very small disconnected objects in distal region
+params.vessels.lastCorr.pass1.maxVol = 300;           % Max object volume
+params.vessels.lastCorr.pass1.minDiam = 3;            % Min diameter for leakage seed
+% Pass 2: leakage in consolidation's distal region
+params.vessels.lastCorr.pass2.minDiam = 2.5;          % Min diameter for leakage seed
+params.vessels.lastCorr.pass2.minArea = 4;            % Min area for leakage seed
+% Pass 3: general distal leakage
+params.vessels.lastCorr.pass3.minDiam = 4;            % Min diameter for leakage seed
+params.vessels.lastCorr.pass3.minArea = 5;            % Min area for leakage seed
+% Pass 4: diameter-based disconnected from inner region
+params.vessels.lastCorr.pass4.minDiam = 3;            % Min diameter for leakage seed
+% Eigenvector orientation filter
+params.vessels.lastCorr.eigvec.maxVol = 3000;         % Max vol for eigenvector check
+params.vessels.lastCorr.eigvec.FA = 0.87;             % FA threshold
+% Seed-based cleanup
+params.vessels.lastCorr.seed.maxVol = 1000;           % Max vol for seed cleanup
+% Final diameter + FA check
+params.vessels.lastCorr.final.maxVol = 150;           % Max vol for final check
+params.vessels.lastCorr.final.minDiam = 3.5;          % Min diameter for final check
+params.vessels.lastCorr.final.FA = 0.94;              % FA threshold for final check
+
+%% Fissure Segmentation Parameters (morphological lobe boundary approach)
+params.fissures.dilationSize = 2;             % Dilation disk size 
+params.fissures.minSize = 5000;               % Min fissure size 
+
+%% Finalization Parameters
+% Airway walls
+params.finalize.airwayWalls.largeAirwayDiam = 4;     % Min diameter for large airways
+params.finalize.airwayWalls.largeWallDist = 2.5;     % Wall distance for large airways
+params.finalize.airwayWalls.normalWallDist = 2;      % Wall distance for normal airways
+params.finalize.airwayWalls.tracheaWallDist = 2.5;   % Wall distance for trachea
+% Large vessel walls
+params.finalize.vesselWalls.largeDist = 1.5;         % Wall distance for large vessels
+% Fibrotic bands recovery
+params.finalize.fibrotic.C = 200;                    % Adaptive threshold constant
+params.finalize.fibrotic.kernelSize = 9;             % Gaussian kernel size
+params.finalize.fibrotic.minVol = 500;               % Min volume for fibrotic bands (6-conn)
 
 %% Distance Classification Parameters (Close/Mid/Far from mediastinum)
 params.distance.closeThreshold = 0.5;         % Threshold for close region

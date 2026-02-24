@@ -30,7 +30,8 @@ fprintf('  Removing spurious fragments - Step0 ...\n');
 Airway = volumes.airways;
 Airway(lungsProcessed.binary == 0) = 0;
 Airway = bwareaopen(Airway, params.airways.minVolume);
-airwaysWip.step0 = Airway; 
+airwaysWip.step0 = Airway;
+AirwayInit = Airway;  % Preserve for diameter-based leakage step 
 
 %% Detect honeycombing and cysts
 fprintf('  Removing honeycombing (distal consolidation-connected airspaces)- Step1 ...\n');
@@ -89,6 +90,19 @@ Airway = Airway & ~cleaningFragments;
 airwaysWip.step3 = Airway; 
 
 honeycombing_space = honeycombing_space | cleaningFragments;
+
+% Step3.5 - Diameter-based leakage removal
+% Volume-independent rule: remove airways with diameter > 6 in far region
+fprintf('  Removing diameter-based leakages (d>6) - Step3.5 ...\n');
+air_leakage = diameterImage > params.airways.leakage.largeDiameter;
+air_leakage(distanceMasks.far == 0) = 0;
+AirwayCorr = AirwayInit;
+AirwayCorr(imdilate(distanceMasks.far, strel('sphere', params.airways.leakage.dilationSize)) == 0) = 0;
+air_leakage = imreconstruct(air_leakage, AirwayCorr, 26);
+honeycombing_space = honeycombing_space | air_leakage;
+Airway = Airway & ~air_leakage;
+airwaysWip.step3_5 = Airway;
+
 fprintf('  Diameter/Volume based cleaning complete\n');
 
 % Step4
@@ -107,8 +121,8 @@ honeycombing_space = honeycombing_space | Airways_blob;
 %% Output
 airwaysSegmented.airways = Airway;
 airwaysSegmented.spurious = honeycombing_space;
-airwaysSegmented.trachea = [];  % Will be filled by trachea segmentation
-airwaysSegmented.walls = [];    % Will be filled by wall segmentation
+airwaysSegmented.trachea = [];  % Populated by segmentTrachea
+airwaysSegmented.walls = [];    % Populated by segmentWalls
 
 fprintf('  Airway segmentation complete\n\n');
 

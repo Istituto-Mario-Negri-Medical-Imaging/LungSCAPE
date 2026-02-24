@@ -61,11 +61,12 @@ lungsProcessed.original = volumes.lungs;
 
 %% Erode lung margins
 fprintf('  Eroding lung margins (size=%d)...\n', params.lungs.erosionSize);
-lungsBinFill = imfill(imbinarize(volumes.lungs, 0), 8, 'holes');
+lungsBinFill = imfill(imbinarize(volumes.lungs, 0), 26, 'holes');
 se = strel('sphere', params.lungs.erosionSize);
 lungsEroded = imerode(lungsBinFill, se);
 
 lungsProcessed.binary = lungsEroded;
+lungsProcessed.lungsBinFill = lungsBinFill;
 
 %% Separate left and right lungs
 fprintf('  Separating left and right lungs...\n');

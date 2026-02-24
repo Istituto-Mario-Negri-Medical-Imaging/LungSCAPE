@@ -110,7 +110,7 @@ patterns = struct(...
     'vessels',       'vesselsTS', ...
     'airway',        'airwaysTS', ...
     'consolidation', 'consolidation', ...
-    'infection',     'HighAttenuation');
+    'injury',        'HighAttenuation');
 
 % Find CT volume (required)
 ctFiles = files(contains({files.name}, patterns.ct));
@@ -154,10 +154,10 @@ if ~isempty(consolidationFiles)
     fileStruct.consolidation = fullfile(patientFolder, consolidationFiles(1).name);
 end
 
-% Find infection/high attenuation segmentation
-infectionFiles = files(contains({files.name}, patterns.infection));
-if ~isempty(infectionFiles)
-    fileStruct.infection = fullfile(patientFolder, infectionFiles(1).name);
+% Find injury/high attenuation segmentation
+injuryFiles = files(contains({files.name}, patterns.injury));
+if ~isempty(injuryFiles)
+    fileStruct.injury = fullfile(patientFolder, injuryFiles(1).name);
 end
 
 end

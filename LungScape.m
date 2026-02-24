@@ -9,7 +9,7 @@
 %   - Regional anatomical analysis
 %
 % Directory Structure:
-%   LungSegMN/
+%   LungScape/
 %   ├── config/          - Parameter configuration
 %   ├── io/              - Data loading and saving
 %   ├── preprocessing/   - Lung mask preprocessing
@@ -115,14 +115,26 @@ function processPatient(patientData)
 %
 %   See also: loadPatientVolumes, getProcessingParameters, saveResults
 
+    %% Start total timer
+    tTotal = tic;
+    stepTimes = struct();
+
+    %% Step 0: Initialize parallel pool (shared across all steps)
+    params_preload = struct('parallel', struct('workers', 5, 'useParallel', true));
+    initParallelPool(params_preload);
+
     %% Step 1: Load data
+    tStep = tic;
     fprintf('----------------------------------------\n');
     fprintf('STEP 1: Loading data...\n');
     fprintf('----------------------------------------\n');
     volumes = loadPatientVolumes(patientData);
     params = getProcessingParameters(volumes.nii);
+    stepTimes.step01 = toc(tStep);
+    fprintf('  [Step 1 completed in %.1f s]\n\n', stepTimes.step01);
 
     %% Step 2: Preprocess CT volume
+    tStep = tic;
     fprintf('----------------------------------------\n');
     fprintf('STEP 2: Preprocessing CT volume...\n');
     fprintf('----------------------------------------\n');
@@ -138,8 +150,11 @@ function processPatient(patientData)
         params.filtering.iterations, params.voxel.dimensions);
 
     fprintf('  Filtering complete\n\n');
+    stepTimes.step02 = toc(tStep);
+    fprintf('  [Step 2 completed in %.1f s]\n\n', stepTimes.step02);
 
     %% Step 3: Preprocess lungs
+    tStep = tic;
     fprintf('----------------------------------------\n');
     fprintf('STEP 3: Preprocessing lungs...\n');
     fprintf('----------------------------------------\n');
@@ -156,8 +171,11 @@ function processPatient(patientData)
 
     % Preprocess lung masks
     [lungsProcessed, cardinalPoints] = preprocessLungs(volumes, params);
+    stepTimes.step03 = toc(tStep);
+    fprintf('  [Step 3 completed in %.1f s]\n\n', stepTimes.step03);
 
     %% Step 4: Refine lobe segmentation (if available)
+    tStep = tic;
     if volumes.hasLobes
         fprintf('----------------------------------------\n');
         fprintf('STEP 4: Refining lobe segmentation...\n');
@@ -168,133 +186,176 @@ function processPatient(patientData)
             lungsProcessed.binary, params);
         results.lobes = lobesRefined;
     end
+    stepTimes.step04 = toc(tStep);
+    fprintf('  [Step 4 completed in %.1f s]\n\n', stepTimes.step04);
 
-    %% Step 5: Classify distance from pleural surface
+    %% Step 5: Segment fissures (needed for vessel refinement)
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 5: Classifying parenchymal regions...\n');
+    fprintf('STEP 5: Segmenting fissures...\n');
+    fprintf('----------------------------------------\n');
+    if volumes.hasLobes
+        [fissures, ~] = segmentFissures(volumes, lungsProcessed, ...
+            lobesRefined, params);
+    else
+        fissures = false(size(lungsProcessed.binary));
+    end
+    stepTimes.step05 = toc(tStep);
+    fprintf('  [Step 5 completed in %.1f s]\n\n', stepTimes.step05);
+
+    %% Step 6: Classify distance from pleural surface
+    tStep = tic;
+    fprintf('----------------------------------------\n');
+    fprintf('STEP 6: Classifying parenchymal regions...\n');
     fprintf('----------------------------------------\n');
     [distanceLabelmap, distanceMasks] = classifyDistanceFromBorder(...
         lungsProcessed.convexhull, lungsProcessed.binary, params);
+    stepTimes.step06 = toc(tStep);
+    fprintf('  [Step 6 completed in %.1f s]\n\n', stepTimes.step06);
 
-    %% Step 6: Segment and refine airways
+    %% Step 7: Segment and refine airways
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 6: Segmenting and refining airways...\n');
+    fprintf('STEP 7: Segmenting and refining airways...\n');
     fprintf('----------------------------------------\n');
     [airwaysSeg, ~] = refineAirways(volumes, lungsProcessed, distanceMasks, params);
     results.airways = airwaysSeg;
+    stepTimes.step07 = toc(tStep);
+    fprintf('  [Step 7 completed in %.1f s]\n\n', stepTimes.step07);
 
-    %% Step 7: Segment and refine injuries (low/high attenuation injuries)
+    %% Step 8: Segment and refine injuries (low/high attenuation injuries)
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 7: Segmenting pathological tissue...\n');
+    fprintf('STEP 8: Segmenting pathological tissue...\n');
     fprintf('----------------------------------------\n');
     injurySeg = segmentInjuries(volumes,  lungsProcessed, airwaysSeg, params);
-    results.injuries = injurySeg; 
+    results.injuries = injurySeg;
     % REVISE BRIGHTNESS MAPPING APPROACH AND SEPARATION BETWEEN GGO AND CONSOLIDATION
+    stepTimes.step08 = toc(tStep);
+    fprintf('  [Step 8 completed in %.1f s]\n\n', stepTimes.step08);
 
-    %% Step 8: Segment vessels with Jerman filter
+    %% Step 9: Segment vessels with Jerman filter
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 8: Segmenting vessels with Jerman filter...\n');
+    fprintf('STEP 9: Segmenting vessels with Jerman filter...\n');
     fprintf('----------------------------------------\n');
     vesselsSeg = segmentVessels(volumes, lungsProcessed, airwaysSeg, ...
         injurySeg, distanceMasks, params);
+    stepTimes.step09 = toc(tStep);
+    fprintf('  [Step 9 completed in %.1f s]\n\n', stepTimes.step09);
 
-    %% Step 9: Refine vessels
+    %% Step 10: Refine vessels
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 9: Post-processing vessels...\n');
+    fprintf('STEP 10: Post-processing vessels...\n');
     fprintf('----------------------------------------\n');
-    [vesselsRefined, largeVessels] = refineVessels(vesselsSeg, volumes, ...
-        lungsProcessed, airwaysSeg, injurySeg, distanceMasks, params);
+    [vesselsRefined, largeVessels, addConsolidation] = refineVessels(vesselsSeg, volumes, ...
+        lungsProcessed, airwaysSeg, injurySeg, distanceMasks, fissures, params);
     results.vessels = vesselsRefined;
-    results.largeVessels = largeVessels;
+    injurySeg.dense = injurySeg.dense | addConsolidation;
+    stepTimes.step10 = toc(tStep);
+    fprintf('  [Step 10 completed in %.1f s]\n\n', stepTimes.step10);
 
-    %% Step 10: Classify vessels by diameter
+    %% Step 11: Segment trachea and finalize bronchi
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 10: Classifying vessels by diameter...\n');
+    fprintf('STEP 11: Segmenting trachea and finalizing bronchi...\n');
     fprintf('----------------------------------------\n');
-    vesselsClassified = classifyVesselsByDiameter(vesselsRefined, params);
-    results.vesselsclass = vesselsClassified;
+    [airwaysSeg, injurySeg.lowAttenuation] = segmentTrachea(volumes, ...
+        lungsProcessed, airwaysSeg, injurySeg.lowAttenuation, params);
+    results.airways = airwaysSeg;
+    stepTimes.step11 = toc(tStep);
+    fprintf('  [Step 11 completed in %.1f s]\n\n', stepTimes.step11);
 
-     %% Step 11: Segment fissures
+    %% Step 12: Refine low-attenuation segmentation (AirSeg)
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 11: Segmenting fissures...\n');
+    fprintf('STEP 12: Refining low-attenuation segmentation...\n');
     fprintf('----------------------------------------\n');
-    if volumes.hasLobes
-        [fissures, fissureInfo] = segmentFissures(volumes, lungsProcessed, ...
-            lobesRefined, params);
-    else
-        fissures = false(size(vesselsRefined));
-        fissureInfo = struct();
-    end    
+    injurySeg.lowAttenuation = refineAirSeg(volumes, lungsProcessed, ...
+        injurySeg.lowAttenuation, injurySeg, airwaysSeg.airways, ...
+        vesselsRefined, params);
+    stepTimes.step12 = toc(tStep);
+    fprintf('  [Step 12 completed in %.1f s]\n\n', stepTimes.step12);
 
-    %% Step 12: Segment walls
+    %% Step 13: Finalize segmentations (walls + masking + fibrotic bands)
+    tStep = tic;
     fprintf('----------------------------------------\n');
-    fprintf('STEP 12: Segmenting tubular structure walls...\n');
-    fprintf('----------------------------------------\n');
-    airwayWalls = segmentWalls(airwaysSeg.airways, 'airway', params);
-    vesselWalls = segmentWalls(vesselsRefined, 'vessel', params);
-    largeVesselWalls = segmentWalls(largeVessels, 'large_vessel', params);
-
-    % Trachea walls
-    if isfield(airwaysSeg, 'trachea') && any(airwaysSeg.trachea(:))
-        tracheaWalls = segmentWalls(airwaysSeg.trachea, 'airway', params);
-    else
-        tracheaWalls = false(size(vesselsRefined));
-    end
-
-    %% Step 13: Create regional maps
-    fprintf('----------------------------------------\n');
-    fprintf('STEP 13: Creating regional analysis maps...\n');
-    fprintf('----------------------------------------\n');
-    lungs_R = lungsProcessed.binary & (volumes.lungs == 1);
-    lungs_L = lungsProcessed.binary & (volumes.lungs == 2);
-    regionalMaps = createRegionalMaps(lungs_R, lungs_L, lungsProcessed.binary, cardinalPoints);
-
-    %% Step 14: Create final label map
-    fprintf('----------------------------------------\n');
-    fprintf('STEP 14: Creating final label map...\n');
+    fprintf('STEP 13: Finalizing segmentations...\n');
     fprintf('----------------------------------------\n');
 
-    % Consolidation segmentation (dense opacities from injury segmentation)
-    consolidationSeg = injurySeg.dense;
-    consolidationSeg = consolidationSeg & ~vesselsRefined;
-    consolidationSeg = consolidationSeg & ~airwaysSeg.airways;
-    consolidationSeg = bwareaopen(consolidationSeg, 20, 6);
+    % Prepare inputs for finalization
+    denseSeg = injurySeg.dense;
+    denseSeg = denseSeg & ~vesselsRefined;
+    denseSeg = denseSeg & ~airwaysSeg.airways;
+    denseSeg = bwareaopen(denseSeg, 20, 6);
 
-    % Air segmentation (use pre-computed from injurySeg)
     airSeg = injurySeg.lowAttenuation;
     airSeg = airSeg & ~airwaysSeg.airways;
 
-    % Compromised tissue (GGO - ground glass opacity)
-    compromisedSeg = injurySeg.ggo;
-    compromisedSeg = compromisedSeg & ~consolidationSeg;
-    compromisedSeg = compromisedSeg & ~vesselsRefined;
-    compromisedSeg = compromisedSeg & ~airwaysSeg.airways;
-    compromisedSeg = bwareaopen(compromisedSeg, 30, 6);
+    ggoSeg = injurySeg.ggo;
+    ggoSeg = ggoSeg & ~denseSeg;
+    ggoSeg = ggoSeg & ~vesselsRefined;
+    ggoSeg = ggoSeg & ~airwaysSeg.airways;
+    ggoSeg = bwareaopen(ggoSeg, 30, 6);
 
-    % Create segmentation structure
+    trachea = [];
+    if isfield(airwaysSeg, 'trachea')
+        trachea = airwaysSeg.trachea;
+    end
+    if isempty(trachea)
+        trachea = false(size(lungsProcessed.binary));
+    end
+
+    segs = finalizeSegmentations(vesselsRefined, largeVessels, ...
+        airwaysSeg.airways, trachea, denseSeg, ggoSeg, airSeg, ...
+        lungsProcessed.binary, distanceMasks, fissures, volumes, params);
+    stepTimes.step13 = toc(tStep);
+    fprintf('  [Step 13 completed in %.1f s]\n\n', stepTimes.step13);
+
+    %% Step 14: Classify vessels by diameter
+    tStep = tic;
+    fprintf('----------------------------------------\n');
+    fprintf('STEP 14: Classifying vessels by diameter...\n');
+    fprintf('----------------------------------------\n');
+    vesselsClassified = classifyVesselsByDiameter(segs.vessels, params);
+    results.vesselsclass = vesselsClassified;
+    stepTimes.step14 = toc(tStep);
+    fprintf('  [Step 14 completed in %.1f s]\n\n', stepTimes.step14);
+
+    %% Step 15: Create regional maps
+    tStep = tic;
+    fprintf('----------------------------------------\n');
+    fprintf('STEP 15: Creating regional analysis maps...\n');
+    fprintf('----------------------------------------\n');
+    regionalMaps = createRegionalMaps(lungsProcessed.right, lungsProcessed.left, lungsProcessed.binary, cardinalPoints);
+    stepTimes.step15 = toc(tStep);
+    fprintf('  [Step 15 completed in %.1f s]\n\n', stepTimes.step15);
+
+    %% Step 16: Create final label map
+    tStep = tic;
+    fprintf('----------------------------------------\n');
+    fprintf('STEP 16: Creating final label map...\n');
+    fprintf('----------------------------------------\n');
+
+    % Create segmentation structure from finalized results
     segmentations.lungs = lungsProcessed.binary;
     if volumes.hasLobes
         segmentations.lobes = lobesRefined;
     end
-    segmentations.airways = airwaysSeg.airways;
-    if isfield(airwaysSeg, 'trachea')
-        segmentations.trachea = airwaysSeg.trachea;
-    else
-        segmentations.trachea = false(size(vesselsRefined));
-    end
-    segmentations.vessels = vesselsRefined;
-    segmentations.largeVessels = largeVessels;
-    segmentations.vesselsClassified = vesselsClassified;
-    segmentations.consolidation = consolidationSeg;
-    segmentations.compromised = compromisedSeg;
-    segmentations.air = airSeg;
-    segmentations.airwayWalls = airwayWalls;
-    segmentations.vesselWalls = vesselWalls;
-    segmentations.largeVesselWalls = largeVesselWalls;
-    segmentations.tracheaWalls = tracheaWalls;
-    segmentations.fissures = fissures;
+    segmentations.airways = segs.airways;
+    segmentations.trachea = segs.trachea;
+    segmentations.vessels = segs.vessels;
+    segmentations.dense = segs.dense;
+    segmentations.ggo = segs.ggo;
+    segmentations.air = segs.airSeg;
+    segmentations.airwayWalls = segs.airwayWalls;
+    segmentations.vesselWalls = segs.vesselWalls;
+    segmentations.tracheaWalls = segs.tracheaWalls;
 
     totalLabelMap = createLabelMap(segmentations, lungsProcessed.binary);
+    stepTimes.step16 = toc(tStep);
+    fprintf('  [Step 16 completed in %.1f s]\n\n', stepTimes.step16);
 
     %% Save results
     fprintf('----------------------------------------\n');
@@ -319,6 +380,48 @@ function processPatient(patientData)
 
     saveResults(results, patientData, params);
 
+    %% Cleanup parallel pool
+    shutdownParallelPool();
+
+    %% Print timing summary
+    totalTime = toc(tTotal);
+    fprintf('\n========== TIMING SUMMARY ==========\n');
+    stepNames = {'Load data', 'Preprocess CT', 'Preprocess lungs', ...
+        'Refine lobes', 'Segment fissures', 'Distance classification', ...
+        'Refine airways', 'Segment pathology', 'Segment vessels (Jerman)', ...
+        'Refine vessels', 'Segment trachea', 'Refine air seg', ...
+        'Classify vessel diameter', 'Finalize segmentations', ...
+        'Regional maps', 'Create label map'};
+    fields = fieldnames(stepTimes);
+    for i = 1:length(fields)
+        fprintf('  Step %2d: %6.1f s  (%s)\n', i, stepTimes.(fields{i}), stepNames{i});
+    end
+    fprintf('  -----------------------------------\n');
+    fprintf('  TOTAL:   %6.1f s  (%.1f min)\n', totalTime, totalTime/60);
+    fprintf('====================================\n');
+
     fprintf('\n Patient %s completed successfully!\n', patientData.name);
 
+end
+
+%% Parallel Pool Management
+
+function initParallelPool(params)
+%INITPARALLELPOOL Create parallel pool if needed (once per patient)
+    if params.parallel.useParallel && params.parallel.workers > 0
+        poolobj = gcp('nocreate');
+        if isempty(poolobj)
+            parpool(params.parallel.workers);
+            fprintf('  Parallel pool created (%d workers)\n', params.parallel.workers);
+        end
+    end
+end
+
+function shutdownParallelPool()
+%SHUTDOWNPARALLELPOOL Delete parallel pool at end of patient processing
+    poolobj = gcp('nocreate');
+    if ~isempty(poolobj)
+        delete(poolobj);
+        fprintf('  Parallel pool closed\n');
+    end
 end

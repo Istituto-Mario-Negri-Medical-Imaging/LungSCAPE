@@ -194,6 +194,15 @@ vesselsUpdate = removeDistalReticulations(vesselsUpdate, ...
     distanceMasks.far, ...
     params);
 
+%% Multi-threshold vessel refinement in pathological zones
+fprintf('    Multi-threshold vessel refinement in pathological zones...\n');
+
+[vesselsUpdate, pathZoneDiscarded] = refineVesselsInPathologicalZones(...
+    vesselsUpdate, vesselnessEnhanced, lungsProcessed.binary, ...
+    injurySeg, airwaysSeg, distanceMasks, params);
+
+vesselsSeg.pathZoneDiscarded = pathZoneDiscarded;
+
 %% Final cleanup
 fprintf('    Performing final cleanup...\n');
 
@@ -260,6 +269,65 @@ function vesselsRecovered = recoverVesselsNearAirways(vessels, airways, diameter
 
     % Reconstruct full vessels
     vesselsRecovered = imreconstruct(vesselsCloseToAirways, vessels, 8);
+end
+
+
+%% Helper function: Multi-threshold vessel refinement in pathological zones
+function [vesselsUpdate, pathZoneDiscarded] = refineVesselsInPathologicalZones(...
+    vesselsUpdate, vesselnessEnhanced, lungsbin, injurySeg, airwaysSeg, distanceMasks, params)
+    % Applies increasing vesselness requirements in pathological zones
+    % to remove false positive vessels (reticulations, consolidation leakage).
+    % Implements 4 sub-steps with different vesselness thresholds:
+    %   #0: Distal consolidation region → require vesselness > 0.85
+    %   #1: Outer borders + bright structures in far region
+    %   #2: Near honeycombing → require vesselness > 0.85
+    %   #3: General consolidation → require vesselness > 0.80
+
+    pz = params.vessels.pathZone;
+
+    % Compute external boundary of lungs
+    outBorders2 = bwmorph3(imfill(lungsbin, 8, 'holes'), 'remove');
+    outBorders = distanceMasks.far & outBorders2;
+
+    % Compute distal region excluding apex/base
+    far_LungsCenter = imdilate(distanceMasks.midfar, strel('square', pz.midfarDilateSize));
+    far_LungsCenter = imreconstruct(far_LungsCenter, distanceMasks.far, 8);
+    far_LungsCenter = imdilate(far_LungsCenter, strel('disk', pz.farDilateSize));
+    outBorders2far = outBorders2 & far_LungsCenter;
+
+    consolidation = logical(injurySeg.dense);
+    brightstructures = logical(injurySeg.brightstructures);
+
+    % #0: Distal consolidation, require vesselness > 0.85
+    discard0 = imreconstruct(uint8(outBorders2far), uint8(consolidation), 8);
+    discard0(vesselnessEnhanced > pz.vesselness85) = 0;
+
+    % #1: Outer borders + bright structures in far region
+    discard1 = imreconstruct(uint8(outBorders2far), uint8(brightstructures), 8);
+    discard1 = uint8(outBorders) | discard1;
+    discard1(distanceMasks.far == 0) = 0;
+
+    % #2: Near honeycombing, require vesselness > 0.85
+    if isfield(airwaysSeg, 'spurious') && any(airwaysSeg.spurious(:))
+        honeycombDil = imdilate(airwaysSeg.spurious, strel('disk', 1));
+        discard2 = imreconstruct(uint8(honeycombDil), uint8(consolidation), 8);
+        discard2(vesselnessEnhanced > pz.vesselness85) = 0;
+    else
+        discard2 = false(size(vesselsUpdate));
+    end
+
+    % #3: General consolidation, require vesselness > 0.80
+    discard3 = consolidation;
+    discard3(vesselnessEnhanced > pz.vesselness80) = 0;
+
+    % Combine all discard zones
+    allDiscard = logical(discard3) | logical(discard0) | logical(discard1) | logical(discard2);
+
+    % Track what was removed for downstream reclassification
+    pathZoneDiscarded = vesselsUpdate & allDiscard;
+
+    % Update vessels
+    vesselsUpdate = vesselsUpdate & ~allDiscard;
 end
 
 

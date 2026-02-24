@@ -51,9 +51,6 @@ end
 if ~isfield(params, 'largeDiameterThreshold')
     params.largeDiameterThreshold = 6;
 end
-if ~isfield(params, 'numWorkers')
-    params.numWorkers = 3;
-end
 
 %% Compute diameter map
 fprintf('    Computing vessel diameter map...\n');
@@ -115,8 +112,6 @@ diameterImageLbl = diameterImageLbl .* uint8(bwmorph3(...
     diameterImageLbl, diameterImageMid, diameterImageLarge, ...
     diameterImageSmall, params);
 
-diameterImageLarge = diameterImageLarge & ~large2change;
-
 %% Create final skeleton label map
 fprintf('    Creating final skeleton classification...\n');
 
@@ -157,25 +152,11 @@ function [mid, large, small] = propagateLabelsToFragments(fragments, labelImg, .
     lbl_idx(1) = [];  % Remove background
     lbl_idx_new = zeros(size(lbl_idx));
 
-    % Use parallel processing for speed
-    poolobj = gcp('nocreate');
-    if isempty(poolobj)
-        if params.numWorkers > 0
-            parpool(params.numWorkers);
-        end
-    end
-
     % For each fragment, find nearest endpoint and get its label
-    parfor (lbl_idx_k = 1:length(lbl_idx), params.numWorkers)
+    parfor (lbl_idx_k = 1:length(lbl_idx), params.parallel.workers)
         val2change = lbl_idx(lbl_idx_k);
         [val_row, val_col, val_z] = ind2sub(size(fragments), val2change);
         lbl_idx_new(lbl_idx_k) = labelImg(val_row, val_col, val_z);
-    end
-
-    % Clean up parallel pool
-    poolobj = gcp('nocreate');
-    if ~isempty(poolobj)
-        delete(poolobj);
     end
 
     % Assign fragments to appropriate size category
@@ -204,25 +185,11 @@ function classifiedImg = propagateLabelsNN(toClassify, labelImg, params)
     lbl_idx(1) = [];  % Remove background
     lbl_idx_new = zeros(size(lbl_idx));
 
-    % Use parallel processing
-    poolobj = gcp('nocreate');
-    if isempty(poolobj)
-        if params.numWorkers > 0
-            parpool(params.numWorkers);
-        end
-    end
-
     % For each voxel, find nearest labeled voxel
-    parfor (lbl_idx_k = 1:length(lbl_idx), params.numWorkers)
+    parfor (lbl_idx_k = 1:length(lbl_idx), params.parallel.workers)
         val2change = lbl_idx(lbl_idx_k);
         [val_row, val_col, val_z] = ind2sub(size(toClassify), val2change);
         lbl_idx_new(lbl_idx_k) = labelImg(val_row, val_col, val_z);
-    end
-
-    % Clean up parallel pool
-    poolobj = gcp('nocreate');
-    if ~isempty(poolobj)
-        delete(poolobj);
     end
 
     % Create classified image

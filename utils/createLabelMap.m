@@ -14,15 +14,15 @@ function labelMap = createLabelMap(segmentations, lungsbin)
 %       labelMap - uint8 volume with labels:
 %           0 - Background (outside lungs)
 %           1 - Healthy parenchyma
-%           2 - Ground glass opacity (GGO) /Compromised tissue
-%           3 - Consolidation
+%           2 - Ground glass opacity (GGO)
+%           3 - Consolidation/Dense opacities
 %           4 - Air trapping/cysts
-%           5 - Small/medium vessels
+%           5 - Vessels
 %           6 - Airways (bronchi)
 %           7 - Trachea
-%           8 - Large vessels
-%           9 - Airway walls
-%          10 - Trachea walls
+%           8 - Airway walls
+%           9 - Trachea walls
+%          10 - Vessel walls
 %
 %   Priority (later labels override earlier):
 %       Background < Healthy < GGO < Consolidation < Air < Vessels < Airways
@@ -42,9 +42,9 @@ if isfield(segmentations, 'ggo')
     labelMap(segmentations.ggo ~= 0) = 2;
 end
 
-% Label 3: Consolidation
-if isfield(segmentations, 'consolidation')
-    labelMap(segmentations.consolidation ~= 0) = 3;
+% Label 3: Consolidation/Dense opacities
+if isfield(segmentations, 'dense')
+    labelMap(segmentations.dense ~= 0) = 3;
 end
 
 % Label 4: Air trapping/cysts
@@ -52,14 +52,9 @@ if isfield(segmentations, 'air')
     labelMap(segmentations.air ~= 0) = 4;
 end
 
-% Label 5: Small/medium vessels
+% Label 5: Vessels
 if isfield(segmentations, 'vessels')
     labelMap(segmentations.vessels ~= 0) = 5;
-end
-
-% Label 8: Large vessels
-if isfield(segmentations, 'largeVessels')
-    labelMap(segmentations.largeVessels ~= 0) = 8;
 end
 
 % Label 6: Airways
@@ -72,18 +67,24 @@ if isfield(segmentations, 'trachea')
     labelMap(segmentations.trachea ~= 0) = 7;
 end
 
-% Label 9: Airway walls
+% Label 8: Airway walls
 if isfield(segmentations, 'airwayWalls')
-    labelMap(segmentations.airwayWalls ~= 0) = 9;
+    labelMap(segmentations.airwayWalls ~= 0) = 8;
 end
 
-% Label 10: Trachea walls
+% Label 9: Trachea walls
 if isfield(segmentations, 'tracheaWalls')
-    labelMap(segmentations.tracheaWalls ~= 0) = 10;
+    labelMap(segmentations.tracheaWalls ~= 0) = 9;
 end
 
-% Ensure background stays background
-labelMap(lungsbin == 0) = 0;
+% Label 10: Vessel walls
+if isfield(segmentations, 'vesselWalls')
+    labelMap(segmentations.vesselWalls ~= 0) = 10;
+end
+
+% Ensure background stays background, but preserve extra-pulmonary
+% structures (trachea and trachea walls extend beyond lung parenchyma)
+labelMap(lungsbin == 0 & labelMap ~= 6 & labelMap ~= 8 & labelMap ~= 7 & labelMap ~= 9) = 0;
 
 fprintf('  Label map created\n\n');
 

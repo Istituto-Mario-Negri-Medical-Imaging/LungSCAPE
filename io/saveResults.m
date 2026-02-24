@@ -7,21 +7,22 @@ function saveResults(results, patientData, params)
 %   maps, vessel classification, and processed CT volume in NRRD and MAT formats.
 %
 %   Inputs:
-%       results                - Structure with segmentation results:
-%           .labelMap            - Total label map (uint8)
-%           .vesselClassified    - Vessel diameter classification (uint8)
-%           .segmentsMapSI       - Superior-Inferior regional map (uint8)
-%           .segmentsMapPA       - Posterior-Anterior regional map (uint8)
-%           .segmentsMapLR       - Left-Right regional map (uint8)
-%           .lobesVolume         - Lobe segmentation (uint8)
-%           .distalClass         - Distance classification (uint8)
-%           .ctProcessed         - Filtered CT volume (int16)
-%       patientData            - Patient data structure from loadPatientData
-%       params                 - Processing parameters structure
+%       results     - Structure with segmentation results:
+%           .labelMap          - Total label map (uint8)
+%           .vesselClassified  - Vessel diameter classification (uint8)
+%           .segmentsMapSI     - Superior-Inferior regional map (uint8)
+%           .segmentsMapPA     - Posterior-Anterior regional map (uint8)
+%           .segmentsMapLR     - Left-Right regional map (uint8)
+%           .lobesVolume       - Lobe segmentation (uint8)
+%           .distalClass       - Distance classification (uint8)
+%           .ctProcessed       - Filtered CT volume (int16)
+%       patientData - Patient data structure from loadPatientData
+%       params      - Processing parameters structure
 %
 %   Output Files:
 %       <PatientFolder>/InterimResults/
 %           - TotalLabelMap.nrrd     : Complete segmentation label map
+%           - VesselsLabelMap.nrrd   : Vessel diameter classification (1=large,2=medium,3=small)
 %           - Vol_<Patient>.nrrd     : Original/processed CT volume
 %           - <Patient>.mat          : MATLAB workspace with all variables
 %
@@ -29,14 +30,14 @@ function saveResults(results, patientData, params)
 %       0 - Background (outside lungs)
 %       1 - Healthy parenchyma
 %       2 - Ground glass opacity (GGO)
-%       3 - Reticulation/Consolidation
+%       3 - Consolidation
 %       4 - Air trapping/cysts
 %       5 - Vessels
 %       6 - Airways (bronchi)
 %       7 - Trachea
-%       8 - Vessels walls
-%       9 - Airway walls
-%      10 - Trachea walls
+%       8 - Airway walls
+%       9 - Trachea walls
+%      10 - Vessel walls
 %
 %   Example:
 %       results = processPatient(volumes, params);
@@ -57,6 +58,12 @@ end
 fprintf('  Saving total label map...\n');
 labelMapFile = fullfile(outputDir, 'TotalLabelMap.nrrd');
 nrrdWriter(labelMapFile, uint8(results.labelMap), ...
+    params.voxel.dimensions, [0, 0, 0], 'raw');
+
+%% Save Vessel Classification Label Map (NRRD)
+fprintf('  Saving vessel classification label map...\n');
+vesselMapFile = fullfile(outputDir, 'VesselsLabelMap.nrrd');
+nrrdWriter(vesselMapFile, uint8(results.vesselClassified), ...
     params.voxel.dimensions, [0, 0, 0], 'raw');
 
 %% Save Processed CT Volume (NRRD)
@@ -82,7 +89,8 @@ saveVars.lungs = results.lungs;
 saveVars.lungsbin = results.lungsbin;
 saveVars.VoxelVolume = params.voxel.volume;
 saveVars.px = params.voxel.px;
-saveVars.vx = params.voxel.vz;
+saveVars.py = params.voxel.py;
+saveVars.vz = params.voxel.vz;
 saveVars.PatientName = patientData.name;
 saveVars.ProcessingDate = datetime('now');
 saveVars.Parameters = params;
@@ -120,10 +128,9 @@ airVol = sum(labelMap(:) == 4) * voxelVolume / 1000;
 vesselVol = sum(labelMap(:) == 5) * voxelVolume / 1000;
 airwayVol = sum(labelMap(:) == 6) * voxelVolume / 1000;
 tracheaVol = sum(labelMap(:) == 7) * voxelVolume / 1000;
-largeVesselVol = sum(labelMap(:) == 8) * voxelVolume / 1000;
 
 totalLungVol = healthyVol + ggoVol + consolidationVol + airVol + ...
-               vesselVol + airwayVol + largeVesselVol;
+               vesselVol + airwayVol;
 
 fprintf('  Total Lung Volume:    %8.1f mL\n', totalLungVol);
 fprintf('  Healthy Parenchyma:   %8.1f mL (%5.1f%%)\n', ...
@@ -134,10 +141,8 @@ fprintf('  Consolidation:        %8.1f mL (%5.1f%%)\n', ...
     consolidationVol, 100*consolidationVol/totalLungVol);
 fprintf('  Air Trapping:         %8.1f mL (%5.1f%%)\n', ...
     airVol, 100*airVol/totalLungVol);
-fprintf('  Vessels (Small/Med):  %8.1f mL (%5.1f%%)\n', ...
+fprintf('  Vessels:              %8.1f mL (%5.1f%%)\n', ...
     vesselVol, 100*vesselVol/totalLungVol);
-fprintf('  Vessels (Large):      %8.1f mL (%5.1f%%)\n', ...
-    largeVesselVol, 100*largeVesselVol/totalLungVol);
 fprintf('  Airways:              %8.1f mL (%5.1f%%)\n', ...
     airwayVol, 100*airwayVol/totalLungVol);
 fprintf('  Trachea:              %8.1f mL\n', tracheaVol);

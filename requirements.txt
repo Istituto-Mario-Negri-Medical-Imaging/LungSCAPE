@@ -1,0 +1,37 @@
+# =============================================================================
+# LungScape - Requirements
+# =============================================================================
+#
+# This file lists all software dependencies required to run the LungScape
+# pipeline. Dependencies are organized by environment.
+#
+# =============================================================================
+
+# ---- PYTHON PACKAGES ----
+# Install with: pip install -r requirements.txt
+
+TotalSegmentator>=2.0
+nibabel>=4.0
+numpy>=1.21
+nnunetv2>=2.0
+
+# Note: TotalSegmentator will automatically install its own dependencies
+# (PyTorch, onnxruntime, etc.)
+
+# ---- MATLAB (not installable via pip - listed here for reference) ----
+#
+# MATLAB version:
+#   MATLAB R2019b or later
+#
+# Required Toolboxes:
+#   - Image Processing Toolbox
+#   - Parallel Computing Toolbox
+#
+# External MATLAB libraries (must be on the MATLAB path):
+#   - NIfTI and ANALYZE tools (load_untouch_nii)
+#     Source: https://mathworks.com/matlabcentral/fileexchange/8797
+#   - anisodiff3D: 3D anisotropic diffusion filter
+#   - vesselness3D: Jerman vessel enhancement filter
+#     Reference: Jerman et al., IEEE TMI 2016
+#   - nrrdWriter: NRRD file export utility
+#   - Image Graphs: create and visualize graphs based on image pixel neighbor relationships (Steve Eddins (2026), https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs)
