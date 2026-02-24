@@ -1,4 +1,4 @@
-# LungScape - Lung CT Segmentation Pipeline
+# LungScape - Lung Segmentation: a Comprehensive and Automatic PipelinE
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
 ## Overview
