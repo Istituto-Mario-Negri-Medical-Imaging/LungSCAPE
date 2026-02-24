@@ -1,6 +1,9 @@
 # LungScape - Lung Segmentation: a Comprehensive and Automatic PipelinE
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
+
+![Logo](https://github.com/GitAlbMN/lungscape/images/lungscape_logo.png)
+
 ## Overview
 
 LungScape is a two-stage pipeline for comprehensive segmentation of lung structures from chest HRCT scans. Deep learning models (TotalSegmentator, nnU-Net) generate initial segmentations in Python, which are then refined and combined by a MATLAB processing engine using morphological operations, vesselness filtering, and graph-based analysis.
