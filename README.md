@@ -2,7 +2,7 @@
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
 <p align="center">
-  <img src="images/lungscape_logo.png" alt="Logo" width="300">
+  <img src="images/lungscape_logo.png" alt="Logo" width="600">
 </p>
 
 ## Overview
