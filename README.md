@@ -1,8 +1,8 @@
 # LungScape - Lung Segmentation: a Comprehensive and Automatic PipelinE
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
-
-![Logo](https://github.com/GitAlbMN/lungscape/images/lungscape_logo.png)
+images
+![Logo](https://github.com/GitAlbMN/lungscape/tree/main/images/lungscape_logo.png)
 
 ## Overview
 
