@@ -1,9 +1,5 @@
-# LungSCAPE - Lung Segmentation: a Comprehensive and Automatic PipelinE
+# LungScape - Lung CT Segmentation Pipeline
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
-
-<p align="center">
-  <img src="images/lungscape_logo.png" alt="Logo" width="600">
-</p>
 
 ## Overview
 
@@ -19,7 +15,14 @@ The pipeline segments:
 ## Pipeline Architecture
 
 ```
-CT NIfTI volumes
+DICOM Dataset
+       |
+       v
+ +--------------------------+
+ | STEP 0: DATASET PREP     |
+ |  prepare_dataset.py      |  --> NIfTI conversion, resampling,
+ |                          |      DATA/ structure, nnU-Net INPUT/
+ +--------------------------+
        |
        v
  +--------------------------+
@@ -46,6 +49,7 @@ LungScape/
 ├── LungScape.m                     # Main MATLAB pipeline (16 steps)
 ├── README.md
 ├── requirements.txt                # Python dependencies
+├── prepare_dataset.py              # Step 0: DICOM→NIfTI conversion + resampling
 ├── run_TotalSegmentator.py         # Step 1: generate initial segmentations
 ├── setup_model191.py               # Step 2a: download and install nnU-Net model
 ├── run_model191.py                 # Step 2b: run nnU-Net high attenuation segmentation
@@ -77,7 +81,9 @@ LungScape/
     ├── computeVesselDiameter.m           # Local diameter map computation
     ├── connectVesselBranches.m           # Graph-based branch connectivity
     ├── createRegionalMaps.m              # SI, PA, LR regional division
-    └── createLabelMap.m                  # Final label map generation
+    ├── createLabelMap.m                  # Final label map generation
+    ├── binaryImageGraph3Weighted.m      # Weighted 3-D pixel graph (Image Graphs extension)
+    └── binaryImageGraphWeighted.m       # Weighted 2-D pixel graph (Image Graphs extension)
 ```
 
 ## Requirements
@@ -95,8 +101,14 @@ pip install -r requirements.txt
 | nibabel | >= 4.0 | NIfTI file I/O |
 | numpy | >= 1.21 | Array operations |
 | nnunetv2 | >= 2.0 | High attenuation abnormality segmentation |
+| antspyx | >= 0.4.0 | Volume resampling (Step 0) |
 
 TotalSegmentator will automatically install PyTorch and its own dependencies.
+
+**System dependencies** (must be installed separately):
+- [dcm2niix](https://github.com/rordenlab/dcm2niix) - DICOM to NIfTI conversion (Step 0)
+  - Ubuntu/Debian: `sudo apt install dcm2niix`
+  - conda: `conda install -c conda-forge dcm2niix`
 
 ### MATLAB
 
@@ -107,20 +119,60 @@ TotalSegmentator will automatically install PyTorch and its own dependencies.
   - `anisodiff3D` - 3D anisotropic diffusion filter
   - `vesselness3D` - Jerman vessel enhancement filter (Jerman et al., IEEE TMI 2016)
   - `nrrdWriter` - NRRD file export utility
-  - [Image Graphs](https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs) - pixel neighbor graph analysis
+  - [Image Graphs](https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs) - pixel neighbor graph analysis (must be on the MATLAB path). The repository includes `binaryImageGraph3Weighted.m` and `binaryImageGraphWeighted.m` in `utils/`, which are weighted extensions of Image Graphs functions and depend on it.
 
 ## Quick Start
 
-### Step 1 - Python Preprocessing: TotalSegmentator
+### Step 0 - Dataset Preparation (DICOM to NIfTI)
 
-Run TotalSegmentator on your CT volumes to generate the initial segmentation masks required by the MATLAB pipeline.
+If your data is in DICOM format, use `prepare_dataset.py` to convert it to NIfTI and set up the working directory structure. Skip this step if you already have NIfTI volumes.
 
 ```bash
+python prepare_dataset.py <dicom_dir> <output_dir>
+```
+
+- `<dicom_dir>`: directory containing one subfolder per patient, each with DICOM files
+- `<output_dir>`: base output directory (will contain `DATA/` and `nnUNet_INPUT/`)
+
+For each patient, the script:
+1. Converts DICOM to NIfTI using `dcm2niix`
+2. Resamples the in-plane matrix to 512x512 if needed (ANTsPy, nearest-neighbor)
+3. Resamples z-spacing to 0.5 mm (ANTsPy, nearest-neighbor)
+4. Saves the result to `DATA/PatientID/PatientID.nii.gz`
+5. Prepares `nnUNet_INPUT/` with nnU-Net naming convention (`caseNNN_0000.nii.gz`) and a `case_mapping.json`
+
+**Options:**
+- `--skip-resampling`: keep original matrix size and spacing
+- `--no-nnunet-input`: skip nnU-Net INPUT folder preparation
+
+**Output structure:**
+
+```
+<output_dir>/
+├── DATA/
+│   ├── Patient001/
+│   │   └── Patient001.nii.gz
+│   └── Patient002/
+│       └── Patient002.nii.gz
+└── nnUNet_INPUT/
+    ├── case001_0000.nii.gz
+    ├── case002_0000.nii.gz
+    └── case_mapping.json
+```
+
+### Step 1 - Python Preprocessing: TotalSegmentator
+
+Run TotalSegmentator on the prepared DATA directory (from Step 0) or on a directory of NIfTI files.
+
+```bash
+# Using DATA directory from Step 0 (recommended):
+python run_TotalSegmentator.py --data-dir <output_dir>/DATA
+
+# Legacy mode (flat directory of NIfTI files):
 python run_TotalSegmentator.py <input_dir> <output_dir>
 ```
 
-- `<input_dir>`: directory containing the CT NIfTI files (`.nii` or `.nii.gz`)
-- `<output_dir>`: directory where patient folders will be created (this will become the `DATA` folder for MATLAB)
+When using `--data-dir`, the script finds CT volumes inside patient subfolders (`PatientID/PatientID.nii.gz`) and writes segmentation outputs to the same folders.
 
 For each CT volume, the script:
 1. Runs TotalSegmentator with lobe-specific ROI extraction (5 lobes)
@@ -156,7 +208,7 @@ This will:
 
 **2b. Run the segmentation:**
 
-Place CT scans in `<base_dir>/INPUT/` with nnU-Net naming convention (`case001_0000.nii.gz`, `case002_0000.nii.gz`, ...), then:
+Place CT scans in `<base_dir>/INPUT/` with nnU-Net naming convention (`case001_0000.nii.gz`, `case002_0000.nii.gz`, ...). If you used Step 0, the `nnUNet_INPUT/` folder is already prepared -- copy or symlink its contents to `<base_dir>/INPUT/`. Then:
 
 ```bash
 # Load nnU-Net environment variables (in a new terminal)
@@ -174,7 +226,7 @@ python run_model191.py <base_dir> --no-cleanup
 
 ### Step 3 - Organize Data Directory
 
-After preprocessing, the `DATA` directory should have this structure:
+If you used Step 0 + Step 1 with `--data-dir`, the DATA directory is already organized. Otherwise, after preprocessing, the `DATA` directory should have this structure:
 
 ```
 DATA/
@@ -264,7 +316,7 @@ If you use this code, please cite this github page!
 
 ## License
 
-Apache License 2.0
+[Specify license]
 
 ## Contact
 
@@ -272,6 +324,11 @@ For questions or issues:
 - Alberto Arrigoni
 
 ## Changelog
+
+### Version 2.1 (2026-02)
+- Added Step 0: `prepare_dataset.py` for DICOM-to-NIfTI conversion, resampling (512x512, 0.5mm z-spacing), and automatic working directory setup
+- `run_TotalSegmentator.py` now supports `--data-dir` mode to work directly on the DATA/ structure
+- Automatic nnU-Net INPUT folder preparation with case mapping
 
 ### Version 2.0 (2026-01)
 - Major refactoring of original monolithic script into modular architecture

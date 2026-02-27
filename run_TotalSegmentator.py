@@ -77,30 +77,79 @@ def process_patient(ct_path, patient_dir, patient_id):
     print(f"  Saved: {patient_id}_lobesTS / _lungsTS / _vesselsTS / _airwaysTS")
 
 
+def find_patients_from_data_dir(data_dir):
+    """Find CT NIfTI files inside a DATA/ directory structure.
+
+    Expects: DATA/PatientID/PatientID.nii.gz
+    Returns list of (ct_path, patient_dir, patient_id) tuples.
+    """
+    patients = []
+    for entry in sorted(os.scandir(data_dir), key=lambda e: e.name):
+        if not entry.is_dir():
+            continue
+        patient_id = entry.name
+        patient_dir = entry.path
+        # Look for PatientID.nii.gz or PatientID.nii
+        for ext in (".nii.gz", ".nii"):
+            ct_path = os.path.join(patient_dir, f"{patient_id}{ext}")
+            if os.path.isfile(ct_path):
+                patients.append((ct_path, patient_dir, patient_id))
+                break
+        else:
+            print(f"  [WARN] No CT found for {patient_id}, skipping")
+    return patients
+
+
+def find_patients_from_flat_dir(input_dir, output_dir):
+    """Find CT NIfTI files in a flat directory (original behavior).
+
+    Returns list of (ct_path, patient_dir, patient_id) tuples.
+    """
+    nifti_files = sorted(
+        f for f in os.listdir(input_dir)
+        if f.endswith((".nii", ".nii.gz"))
+    )
+    patients = []
+    for ct_file in nifti_files:
+        patient_id = ct_file.split(".nii")[0]
+        ct_path = os.path.join(input_dir, ct_file)
+        patient_dir = os.path.join(output_dir, patient_id)
+        patients.append((ct_path, patient_dir, patient_id))
+    return patients
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Run TotalSegmentator lung segmentation and aggregate lobes."
     )
-    parser.add_argument("input_dir", help="Directory containing NIfTI CT images")
-    parser.add_argument("output_dir", help="Directory where patient folders will be created")
+    # Two modes: --data-dir (new) or input_dir + output_dir (legacy)
+    parser.add_argument("input_dir", nargs="?", default=None,
+                        help="Directory containing NIfTI CT images (legacy mode)")
+    parser.add_argument("output_dir", nargs="?", default=None,
+                        help="Directory where patient folders will be created (legacy mode)")
+    parser.add_argument("--data-dir",
+                        help="DATA directory with patient subfolders (from prepare_dataset.py). "
+                             "Each subfolder must contain PatientID.nii.gz.")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
-
-    nifti_files = sorted(
-        f for f in os.listdir(args.input_dir)
-        if f.endswith((".nii", ".nii.gz"))
-    )
-
-    if not nifti_files:
-        print(f"No NIfTI files found in {args.input_dir}")
+    # Determine mode
+    if args.data_dir:
+        if not os.path.isdir(args.data_dir):
+            print(f"[ERROR] DATA directory not found: {args.data_dir}")
+            return
+        patients = find_patients_from_data_dir(args.data_dir)
+    elif args.input_dir and args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+        patients = find_patients_from_flat_dir(args.input_dir, args.output_dir)
+    else:
+        parser.error("Provide either --data-dir or both input_dir and output_dir")
         return
 
-    for ct_file in nifti_files:
-        patient_id = ct_file.split(".nii")[0]
-        ct_path = os.path.join(args.input_dir, ct_file)
-        patient_dir = os.path.join(args.output_dir, patient_id)
+    if not patients:
+        print("No patients found to process.")
+        return
 
+    for ct_path, patient_dir, patient_id in patients:
         print(f"Processing {patient_id}...")
         process_patient(ct_path, patient_dir, patient_id)
         print(f"Done: {patient_id}\n")

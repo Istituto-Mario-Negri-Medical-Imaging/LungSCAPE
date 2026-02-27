@@ -14,9 +14,11 @@ TotalSegmentator>=2.0
 nibabel>=4.0
 numpy>=1.21
 nnunetv2>=2.0
+antspyx>=0.4.0
 
 # Note: TotalSegmentator will automatically install its own dependencies
 # (PyTorch, onnxruntime, etc.)
+# Note: dcm2niix must be installed separately (system package, not pip)
 
 # ---- MATLAB (not installable via pip - listed here for reference) ----
 #
