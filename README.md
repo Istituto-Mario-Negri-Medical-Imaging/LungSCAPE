@@ -120,9 +120,9 @@ TotalSegmentator will automatically install PyTorch and its own dependencies.
 - **Toolboxes**: Image Processing Toolbox, Parallel Computing Toolbox
 - **External libraries** (must be on the MATLAB path):
   - [NIfTI and ANALYZE tools](https://mathworks.com/matlabcentral/fileexchange/8797) (`load_untouch_nii`)
-  - `anisodiff3D` - 3D anisotropic diffusion filter
-  - `vesselness3D` - Jerman vessel enhancement filter (Jerman et al., IEEE TMI 2016)
-  - `nrrdWriter` - NRRD file export utility
+  - [anisodiff3D](https://it.mathworks.com/matlabcentral/fileexchange/14995-anisotropic-diffusion-perona-malik) - 3D anisotropic diffusion filter
+  - [vesselness3D](https://it.mathworks.com/matlabcentral/fileexchange/63171-jerman-enhancement-filter) - Jerman vessel enhancement filter (Jerman et al., IEEE TMI 2016)
+  - [nrrdWriter](https://it.mathworks.com/matlabcentral/fileexchange/48621-nrrdwriter-filename-matrix-pixelspacing-origin-encoding) - NRRD file export utility
   - [Image Graphs](https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs) - pixel neighbor graph analysis (must be on the MATLAB path). The repository includes `binaryImageGraph3Weighted.m` and `binaryImageGraphWeighted.m` in `utils/`, which are weighted extensions of Image Graphs functions and depend on it.
 
 ## Quick Start
