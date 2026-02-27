@@ -1,5 +1,9 @@
-# LungScape - Lung CT Segmentation Pipeline
+# LungSCAPE - Lung Segmentation: a Comprehensive and Automatic PipelinE
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
+
+<p align="center">
+  <img src="images/lungscape_logo.png" alt="Logo" width="600">
+</p>
 
 ## Overview
 
@@ -315,8 +319,7 @@ All processing hyperparameters are centralized in `config/getProcessingParameter
 If you use this code, please cite this github page!
 
 ## License
-
-[Specify license]
+Apache-2.0 license
 
 ## Contact
 
