@@ -33,7 +33,7 @@ DICOM Dataset
  | PYTHON PREPROCESSING     |
  |  1. TotalSegmentator     |  --> lobes, lungs, vessels masks
  |  2. nnU-Net Model201     |  --> airways mask (default)
- |     [or TS --use-ts-airways]
+ |  [or TS --use-ts-airways]|
  |  3. nnU-Net Model191     |  --> high attenuation abnormalities mask
  |     (optional)           |
  +--------------------------+
