@@ -33,7 +33,7 @@ def aggregate_lobes(patient_dir):
     return lobes, lungs
 
 
-def process_patient(ct_path, patient_dir, patient_id):
+def process_patient(ct_path, patient_dir, patient_id, use_ts_airways=False):
     """Run TotalSegmentator (lobes + lung_vessels) and produce final outputs."""
     os.makedirs(patient_dir, exist_ok=True)
 
@@ -63,10 +63,17 @@ def process_patient(ct_path, patient_dir, patient_id):
         os.path.join(patient_dir, "lung_vessels.nii.gz"),
         os.path.join(patient_dir, f"{patient_id}_vesselsTS.nii.gz"),
     )
-    os.rename(
-        os.path.join(patient_dir, "lung_trachea_bronchia.nii.gz"),
-        os.path.join(patient_dir, f"{patient_id}_airwaysTS.nii.gz"),
-    )
+
+    trachea_bronchia_path = os.path.join(patient_dir, "lung_trachea_bronchia.nii.gz")
+    if use_ts_airways:
+        os.rename(
+            trachea_bronchia_path,
+            os.path.join(patient_dir, f"{patient_id}_airwaysTS.nii.gz"),
+        )
+    else:
+        # Airways will be provided by nnU-Net Model201; discard TotalSegmentator output
+        if os.path.exists(trachea_bronchia_path):
+            os.remove(trachea_bronchia_path)
 
     # --- Remove intermediate per-lobe files ---
     for filename, _ in LOBE_FILES:
@@ -74,7 +81,8 @@ def process_patient(ct_path, patient_dir, patient_id):
         if os.path.exists(path):
             os.remove(path)
 
-    print(f"  Saved: {patient_id}_lobesTS / _lungsTS / _vesselsTS / _airwaysTS")
+    airways_source = "_airwaysTS" if use_ts_airways else "(airways from Model201, not TS)"
+    print(f"  Saved: {patient_id}_lobesTS / _lungsTS / _vesselsTS / {airways_source}")
 
 
 def find_patients_from_data_dir(data_dir):
@@ -130,6 +138,11 @@ def main():
     parser.add_argument("--data-dir",
                         help="DATA directory with patient subfolders (from prepare_dataset.py). "
                              "Each subfolder must contain PatientID.nii.gz.")
+    parser.add_argument("--use-ts-airways",
+                        action="store_true",
+                        help="Use TotalSegmentator for airways segmentation instead of nnU-Net Model201 "
+                             "(saves {PatientID}_airwaysTS.nii.gz). By default airways are discarded "
+                             "here and should be generated with run_model201.py.")
     args = parser.parse_args()
 
     # Determine mode
@@ -151,7 +164,7 @@ def main():
 
     for ct_path, patient_dir, patient_id in patients:
         print(f"Processing {patient_id}...")
-        process_patient(ct_path, patient_dir, patient_id)
+        process_patient(ct_path, patient_dir, patient_id, use_ts_airways=args.use_ts_airways)
         print(f"Done: {patient_id}\n")
 
 

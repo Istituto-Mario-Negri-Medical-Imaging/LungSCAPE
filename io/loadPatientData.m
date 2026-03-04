@@ -22,7 +22,8 @@ function patientList = loadPatientData(dataDirectory)
 %       │   ├── Patient001_lobesTS.nii.gz      (Lobes coarse segmentation)
 %       │   ├── Patient001_lungsTS.nii.gz      (Lungs coarse segmentation)
 %       │   ├── Patient001_vesselsTS.nii.gz    (Vessels coarse segmentation)
-%       │   ├── Patient001_airwaysTS.nii.gz    (Airways coarse segmentation)
+%       │   ├── Patient001_airways201.nii.gz   (Airways - nnU-Net Model201, preferred)
+%       │   ├── Patient001_airwaysTS.nii.gz    (Airways - TotalSegmentator, fallback)
 %       │   ├── Patient001_consolidation.nii.gz
 %       │   ├── Patient001_HighAttenuation.nii.gz
 %       └── Patient002/
@@ -108,7 +109,6 @@ patterns = struct(...
     'lobes',         'lobesTS', ...
     'lungs',         'lungsTS', ...
     'vessels',       'vesselsTS', ...
-    'airway',        'airwaysTS', ...
     'consolidation', 'consolidation', ...
     'injury',        'HighAttenuation');
 
@@ -134,11 +134,16 @@ end
 fileStruct.vessels = fullfile(patientFolder, vesselsFiles(1).name);
 
 % Find airway segmentation (required)
-airwayFiles = files(contains({files.name}, patterns.airway));
-if isempty(airwayFiles)
-    error('Airway segmentation not found');
+% Priority: Model201 (airways201) > TotalSegmentator (airwaysTS)
+airway201Files = files(contains({files.name}, 'airways201'));
+airwayTSFiles  = files(contains({files.name}, 'airwaysTS'));
+if ~isempty(airway201Files)
+    fileStruct.airway = fullfile(patientFolder, airway201Files(1).name);
+elseif ~isempty(airwayTSFiles)
+    fileStruct.airway = fullfile(patientFolder, airwayTSFiles(1).name);
+else
+    error('Airway segmentation not found (expected airways201 from Model201 or airwaysTS from TotalSegmentator)');
 end
-fileStruct.airway = fullfile(patientFolder, airwayFiles(1).name);
 
 %%% Optional
 

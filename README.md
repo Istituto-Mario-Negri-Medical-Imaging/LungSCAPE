@@ -1,5 +1,9 @@
-# LungScape - Lung CT Segmentation Pipeline
+# LungSCAPE - Lung Segmentation: a Comprehensive and Automatic PipelinE
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
+
+<p align="center">
+  <img src="images/lungscape_logo.png" alt="Logo" width="600">
+</p>
 
 ## Overview
 
@@ -27,8 +31,11 @@ DICOM Dataset
        v
  +--------------------------+
  | PYTHON PREPROCESSING     |
- |  1. TotalSegmentator     |  --> lobes, lungs, vessels, airways masks
- |  2. nnU-Net Model191     |  --> high attenuation abnormalities mask
+ |  1. TotalSegmentator     |  --> lobes, lungs, vessels masks
+ |  2. nnU-Net Model201     |  --> airways mask (default)
+ |     [or TS --use-ts-airways]
+ |  3. nnU-Net Model191     |  --> high attenuation abnormalities mask
+ |     (optional)           |
  +--------------------------+
        |
        v
@@ -50,9 +57,11 @@ LungScape/
 ├── README.md
 ├── requirements.txt                # Python dependencies
 ├── prepare_dataset.py              # Step 0: DICOM→NIfTI conversion + resampling
-├── run_TotalSegmentator.py         # Step 1: generate initial segmentations
-├── setup_model191.py               # Step 2a: download and install nnU-Net model
-├── run_model191.py                 # Step 2b: run nnU-Net high attenuation segmentation
+├── run_TotalSegmentator.py         # Step 1: generate lobes, lungs, vessels masks
+├── setup_model201.py               # Step 2a: download and install nnU-Net airways model
+├── run_model201.py                 # Step 2b: run nnU-Net airways segmentation (default)
+├── setup_model191.py               # Step 3a: download and install nnU-Net high attenuation model
+├── run_model191.py                 # Step 3b: run nnU-Net high attenuation segmentation (optional)
 ├── config/
 │   └── getProcessingParameters.m         # Centralized parameter management
 ├── io/
@@ -116,32 +125,59 @@ TotalSegmentator will automatically install PyTorch and its own dependencies.
 - **Toolboxes**: Image Processing Toolbox, Parallel Computing Toolbox
 - **External libraries** (must be on the MATLAB path):
   - [NIfTI and ANALYZE tools](https://mathworks.com/matlabcentral/fileexchange/8797) (`load_untouch_nii`)
-  - `anisodiff3D` - 3D anisotropic diffusion filter
-  - `vesselness3D` - Jerman vessel enhancement filter (Jerman et al., IEEE TMI 2016)
-  - `nrrdWriter` - NRRD file export utility
+  - [anisodiff3D](https://it.mathworks.com/matlabcentral/fileexchange/14995-anisotropic-diffusion-perona-malik) - 3D anisotropic diffusion filter
+  - [vesselness3D](https://it.mathworks.com/matlabcentral/fileexchange/63171-jerman-enhancement-filter) - Jerman vessel enhancement filter (Jerman et al., IEEE TMI 2016)
+  - [nrrdWriter](https://it.mathworks.com/matlabcentral/fileexchange/48621-nrrdwriter-filename-matrix-pixelspacing-origin-encoding) - NRRD file export utility
   - [Image Graphs](https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs) - pixel neighbor graph analysis (must be on the MATLAB path). The repository includes `binaryImageGraph3Weighted.m` and `binaryImageGraphWeighted.m` in `utils/`, which are weighted extensions of Image Graphs functions and depend on it.
 
 ## Quick Start
 
-### Step 0 - Dataset Preparation (DICOM to NIfTI)
+### Step 0 - Dataset Preparation
 
-If your data is in DICOM format, use `prepare_dataset.py` to convert it to NIfTI and set up the working directory structure. Skip this step if you already have NIfTI volumes.
+Use `prepare_dataset.py` to resample volumes to the target resolution and organize the working directory structure. Supports both DICOM and NIfTI input.
+
+**From DICOM (default):**
 
 ```bash
 python prepare_dataset.py <dicom_dir> <output_dir>
 ```
 
-- `<dicom_dir>`: directory containing one subfolder per patient, each with DICOM files
-- `<output_dir>`: base output directory (will contain `DATA/` and `nnUNet_INPUT/`)
+- `<dicom_dir>`: directory with one subfolder per patient, each containing DICOM files
 
-For each patient, the script:
+For each patient the script:
 1. Converts DICOM to NIfTI using `dcm2niix`
 2. Resamples the in-plane matrix to 512x512 if needed (ANTsPy, nearest-neighbor)
 3. Resamples z-spacing to 0.5 mm (ANTsPy, nearest-neighbor)
 4. Saves the result to `DATA/PatientID/PatientID.nii.gz`
 5. Prepares `nnUNet_INPUT/` with nnU-Net naming convention (`caseNNN_0000.nii.gz`) and a `case_mapping.json`
 
+**From NIfTI (--nifti):**
+
+```bash
+python prepare_dataset.py <nifti_dir> <output_dir> --nifti
+```
+
+The NIfTI input directory can have two layouts:
+
+```
+# Flat layout (one file per patient):
+<nifti_dir>/
+├── Patient001.nii.gz
+├── Patient002.nii.gz
+└── ...
+
+# Subdir layout (one folder per patient):
+<nifti_dir>/
+├── Patient001/
+│   └── Patient001.nii.gz   (or any single .nii/.nii.gz file)
+├── Patient002/
+└── ...
+```
+
+Resampling is applied in both modes unless `--skip-resampling` is set.
+
 **Options:**
+- `--nifti`: input directory contains NIfTI files (instead of DICOM folders)
 - `--skip-resampling`: keep original matrix size and spacing
 - `--no-nnunet-input`: skip nnU-Net INPUT folder preparation
 
@@ -176,10 +212,16 @@ When using `--data-dir`, the script finds CT volumes inside patient subfolders (
 
 For each CT volume, the script:
 1. Runs TotalSegmentator with lobe-specific ROI extraction (5 lobes)
-2. Runs TotalSegmentator with the `lung_vessels` task for vessel and airway segmentation
+2. Runs TotalSegmentator with the `lung_vessels` task for vessel segmentation
 3. Aggregates the individual lobe masks into a single labelmap (labels 1-5)
 4. Creates a binary whole-lung mask
 5. Renames all outputs with patient-prefixed names
+
+By default, TotalSegmentator airways output is discarded (airways are provided by nnU-Net Model201 in Step 2). To use TotalSegmentator for airways instead, pass `--use-ts-airways`:
+
+```bash
+python run_TotalSegmentator.py --data-dir <output_dir>/DATA --use-ts-airways
+```
 
 **Output files per patient:**
 
@@ -188,45 +230,64 @@ For each CT volume, the script:
 | `{PatientID}_lobesTS.nii.gz` | Lobe segmentation (1=upper left, 2=lower left, 3=upper right, 4=middle right, 5=lower right) |
 | `{PatientID}_lungsTS.nii.gz` | Binary whole-lung mask |
 | `{PatientID}_vesselsTS.nii.gz` | Pulmonary vessel segmentation |
-| `{PatientID}_airwaysTS.nii.gz` | Airway and trachea segmentation |
+| `{PatientID}_airwaysTS.nii.gz` | Airways (only if `--use-ts-airways` is specified) |
 
-### Step 2 - Python Preprocessing: nnU-Net High Attenuation Model
+### Step 2 - Python Preprocessing: nnU-Net Airways Model (Model201)
 
-This step segments high attenuation abnormalities (consolidations, dense opacities) using a pretrained nnU-Net v2 model (Dataset191). Skip this step if your patients do not present significant pathology.
+This step segments airways using a pretrained nnU-Net v2 model (Dataset201). This is the **default** airways source. Skip this step only if you ran Step 1 with `--use-ts-airways`.
 
 **2a. Setup the model (first time only):**
 
 ```bash
-python setup_model191.py <base_dir>
+python setup_model201.py <model201_base_dir>
 ```
 
 This will:
-- Download the pretrained model from Zenodo
+- Download the pretrained airways model from Zenodo
 - Create the nnU-Net directory structure (`nnUNet_raw/`, `nnUNet_preprocessed/`, `nnUNet_results/`, `INPUT/`, `OUTPUT/`)
 - Install the model
 - Generate an activation script for environment variables
 
 **2b. Run the segmentation:**
 
-Place CT scans in `<base_dir>/INPUT/` with nnU-Net naming convention (`case001_0000.nii.gz`, `case002_0000.nii.gz`, ...). If you used Step 0, the `nnUNet_INPUT/` folder is already prepared -- copy or symlink its contents to `<base_dir>/INPUT/`. Then:
+Place CT scans in `<model201_base_dir>/INPUT/` with nnU-Net naming convention (`case001_0000.nii.gz`, ...). If you used Step 0, copy or symlink `nnUNet_INPUT/` contents to `<model201_base_dir>/INPUT/`. Then:
 
 ```bash
 # Load nnU-Net environment variables (in a new terminal)
-source <base_dir>/activate_nnunet_paths.sh
+source <model201_base_dir>/activate_nnunet_paths.sh
 
-python run_model191.py <base_dir>
+python run_model201.py <model201_base_dir>
 ```
 
 Use `--no-cleanup` to keep nnU-Net folders for reuse:
 ```bash
-python run_model191.py <base_dir> --no-cleanup
+python run_model201.py <model201_base_dir> --no-cleanup
+```
+
+**Important**: each output must be renamed to `{PatientID}_airways201.nii.gz` and placed in the corresponding patient folder within the `DATA` directory.
+
+### Step 3 - Python Preprocessing: nnU-Net High Attenuation Model (Model191) *(optional)*
+
+This step segments high attenuation abnormalities (consolidations, dense opacities) using a pretrained nnU-Net v2 model (Dataset191). Skip this step if your patients do not present significant pathology.
+
+**3a. Setup the model (first time only):**
+
+```bash
+python setup_model191.py <model191_base_dir>
+```
+
+**3b. Run the segmentation:**
+
+```bash
+source <model191_base_dir>/activate_nnunet_paths.sh
+python run_model191.py <model191_base_dir>
 ```
 
 **Important**: the output must be renamed to `{PatientID}_HighAttenuation.nii.gz` and placed in the corresponding patient folder within the `DATA` directory.
 
-### Step 3 - Organize Data Directory
+### Step 4 - Organize Data Directory
 
-If you used Step 0 + Step 1 with `--data-dir`, the DATA directory is already organized. Otherwise, after preprocessing, the `DATA` directory should have this structure:
+After preprocessing, the `DATA` directory should have this structure:
 
 ```
 DATA/
@@ -235,14 +296,17 @@ DATA/
 │   ├── Patient001_lobesTS.nii.gz           (from TotalSegmentator - optional)
 │   ├── Patient001_lungsTS.nii.gz           (from TotalSegmentator - required)
 │   ├── Patient001_vesselsTS.nii.gz         (from TotalSegmentator - required)
-│   ├── Patient001_airwaysTS.nii.gz         (from TotalSegmentator - required)
+│   ├── Patient001_airways201.nii.gz        (from nnU-Net Model201 - required by default)
+│   ├── Patient001_airwaysTS.nii.gz         (from TotalSegmentator - required if --use-ts-airways)
 │   ├── Patient001_consolidation.nii.gz     (external consolidation mask - optional)
 │   └── Patient001_HighAttenuation.nii.gz   (from nnU-Net Model191 - optional)
 ├── Patient002/
 │   └── ...
 ```
 
-### Step 4 - Run MATLAB Pipeline
+The MATLAB pipeline automatically looks for `airways201` first; if not found, it falls back to `airwaysTS`.
+
+### Step 5 - Run MATLAB Pipeline
 
 ```matlab
 % Set the DATA path in LungScape.m, then run:
@@ -270,7 +334,7 @@ The pipeline processes each patient through 16 steps:
 | 15 | `createRegionalMaps` | Create SI, PA, LR regional maps |
 | 16 | `createLabelMap` + `saveResults` | Combine and save final outputs |
 
-### Step 5 - View Results
+### Step 6 - View Results
 
 Results are saved in `<PatientFolder>/InterimResults/`:
 
@@ -315,8 +379,7 @@ All processing hyperparameters are centralized in `config/getProcessingParameter
 If you use this code, please cite this github page!
 
 ## License
-
-[Specify license]
+Apache-2.0 license
 
 ## Contact
 
@@ -324,6 +387,12 @@ For questions or issues:
 - Alberto Arrigoni
 
 ## Changelog
+
+### Version 2.2 (2026-03)
+- Added nnU-Net Model201 for airways segmentation (`setup_model201.py`, `run_model201.py`)
+- Model201 is now the **default** airways source; TotalSegmentator airways available via `--use-ts-airways`
+- `loadPatientData.m` now prioritizes `airways201` over `airwaysTS` with automatic fallback
+- Updated pipeline step numbering and documentation accordingly
 
 ### Version 2.1 (2026-02)
 - Added Step 0: `prepare_dataset.py` for DICOM-to-NIfTI conversion, resampling (512x512, 0.5mm z-spacing), and automatic working directory setup
