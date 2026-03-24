@@ -35,7 +35,7 @@ DICOM Dataset
  |  2. nnU-Net Model201     |  --> airways mask (default)
  |  [or TS --use-ts-airways]|
  |  3. nnU-Net Model191     |  --> high attenuation abnormalities mask
- |     (optional)           |
+ |  [--skip-model191]       |
  +--------------------------+
        |
        v
@@ -316,9 +316,9 @@ python run_model201.py <model201_base_dir> --project-dir <output_dir> --no-clean
 
 > **Note on `activate_nnunet_paths.sh`:** setup generates this script for manual reference, but running it is not required — `run_model201.py` sets the nnU-Net environment variables (`nnUNet_raw`, `nnUNet_preprocessed`, `nnUNet_results`) internally before invoking the inference. Make sure the correct Python environment (with nnunetv2 and TotalSegmentator installed) is active before running.
 
-### Step 3 - Python Preprocessing: nnU-Net High Attenuation Model (Model191) *(optional)*
+### Step 3 - Python Preprocessing: nnU-Net High Attenuation Model (Model191)
 
-This step segments high attenuation abnormalities (consolidations, dense opacities) using a pretrained nnU-Net v2 model (Dataset191). Skip this step if your patients do not present significant pathology.
+This step segments high attenuation abnormalities (consolidations, dense opacities) using a pretrained nnU-Net v2 model (Dataset191). The pipeline is designed for patients with lung pathology, so this step is run by default. It can be skipped with `--skip-model191` in `run_pipeline.sh` if the cohort has no significant high attenuation findings.
 
 **3a. Setup the model (first time only):**
 
@@ -378,10 +378,23 @@ The MATLAB pipeline automatically looks for `airways201` first; if not found, it
 
 ### Step 5 - Run MATLAB Pipeline
 
+Open `LungScape.m` and set the two configuration variables at the top of the file:
+
 ```matlab
-% Set the DATA path in LungScape.m, then run:
+DATA_DIRECTORY = '/path/to/output/DATA';   % DATA/ folder from Step 0
+N_WORKERS      = 3;                        % parallel pool size (parfor workers)
+```
+
+Then run:
+
+```matlab
 LungScape
 ```
+
+**Behaviour notes:**
+- **Skip already processed patients**: if `Results/TotalLabelMap.nrrd` already exists in a patient folder, that patient is skipped automatically. To force re-processing, delete or rename the `Results/` folder.
+- **Log file**: a timestamped log (`lungscape_<YYYYMMDD_HHMMSS>.log`) is saved in `DATA_DIRECTORY` for each run.
+- **Parallel pool**: a single pool of `N_WORKERS` workers is shared across all patients in the batch.
 
 The pipeline processes each patient through 15 steps (plus two sub-steps):
 
@@ -459,6 +472,15 @@ For questions or issues:
 - Alberto Arrigoni
 
 ## Changelog
+
+### Version 2.5 (2026-03)
+- **`setup_matlab.m`** (new): pre-flight checker for MATLAB toolboxes (Image Processing, Parallel Computing) and external libraries (Jerman filter, vesselness3D + MEX, iso2mesh, NIfTI toolbox, jsonlab); prints actionable install instructions for each missing item
+- **`run_pipeline.sh`** (new): end-to-end shell orchestrator (Steps 0–3); arguments `--input`, `--output`, `--model201-dir`, `--model191-dir`; `--skip-model191` to bypass high-attenuation model; `--use-ts-airways`, `--no-cleanup`; auto-detects already-installed models; logs to `<output_dir>/pipeline.log`; calls `check_data_ready.py` on completion
+- **`check_data_ready.py`** (new): scans `DATA/` and reports per-patient readiness (`[READY]`/`[BLOCKED]`) based on required files (CT, lungsTS, arteriesTS, veinsTS, airways); non-zero exit if any patient is blocked
+- **TotalSegmentator ≥ 2.13.0** now required (was 2.5.0); `run_TotalSegmentator.py` performs a runtime version check and exits with a clear message if the requirement is not met; `requirements.txt` updated accordingly; `nnunetv2>=2.3.1` added as explicit requirement (also installed transitively by TotalSegmentator)
+- **NRRD spatial alignment**: `saveResults.m` now inverts the internal 90° rotation before writing all NRRD files and uses the NIfTI sform/qform origin (extracted in `getProcessingParameters.m` as `params.voxel.origin`) so that outputs overlay correctly on the source CT in 3D Slicer and other viewers
+- **`LungScape.m`**: added `N_WORKERS` constant (single source of truth for parallelism); parallel pool opened once before the patient loop and closed after; `diary` logging to `<DATA_DIRECTORY>/lungscape_<timestamp>.log`; skip-if-done guard at the start of `processPatient` (checks for `Results/TotalLabelMap.nrrd`)
+- **`Results/` folder**: output directory renamed from `InterimResults/` to `Results/` throughout `LungScape.m` and `saveResults.m`
 
 ### Version 2.4 (2026-03)
 - `run_model201.py` / `run_model191.py`: added `--project-dir` argument (default: current working directory). When `nnUNet_INPUT/` and `DATA/` are found in the project directory, input files are automatically copied from `nnUNet_INPUT/` to `INPUT/` before inference, and outputs are automatically deployed to `DATA/PatientID/` using `case_mapping.json` — no manual renaming or file-moving required.
