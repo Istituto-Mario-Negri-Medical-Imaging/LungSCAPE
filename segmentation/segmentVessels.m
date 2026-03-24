@@ -11,7 +11,9 @@ function vesselsSeg = segmentVessels(volumes, lungsProcessed, airwaysSeg, injury
 %       volumes        - Structure with fields:
 %           .ct          - Original CT volume (int16, HU values)
 %           .filtered    - Anisotropic diffusion filtered volume
-%           .vessels     - Neural network vessel segmentation
+%           .vessels     - Combined artery+vein mask (arteries | veins)
+%           .arteries    - TotalSegmentator artery mask (uint8, masked to lungs)
+%           .veins       - TotalSegmentator vein mask   (uint8, masked to lungs)
 %       lungsProcessed - Structure with fields:
 %           .binary       - Eroded lung mask
 %       airwaysSeg     - Structure with fields:
@@ -27,22 +29,25 @@ function vesselsSeg = segmentVessels(volumes, lungsProcessed, airwaysSeg, injury
 %
 %   Outputs:
 %       vesselsSeg - Structure with fields:
-%           .final       - Final vessel segmentation (logical)
-%           .main        - Main vasculature only (logical)
-%           .classified  - Diameter-classified vessels (uint8: 1=large, 2=mid, 3=small)
-%           .vesselness  - Vesselness response map (double, 0-1)
-%           .preliminary - Initial vessel segmentation before refinement (logical)
+%           .final            - Final vessel segmentation (logical)
+%           .main             - Main vasculature only (logical)
+%           .vesselness       - Vesselness response map (double, 0-1)
+%           .preliminary      - Initial vessel segmentation after reconstruction (logical)
+%           .rawThreshold     - Initial vessel segmentation before reconstruction (logical)
+%           .loopEndDiscarded - Vessels discarded by loop/end classification (logical)
+%           .pathZoneDiscarded - Vessels discarded by pathological zone refinement (logical)
 %
 %   Algorithm Steps:
-%       1. Apply Jerman vesselness filter to neural network vessel output
+%       1. Apply Jerman vesselness filter to combined vessel mask (arteries | veins)
 %       2. Threshold vesselness response
 %       3. Reconstruct vessels from central lung regions
-%       4. Remove loops and spurious extremities using graph analysis
-%       5. Filter small structures by anisotropy (FA > threshold)
+%       4. Recover bronchovascular bundles near airways (arterial territory only)
+%       5. Remove loops and spurious extremities using graph analysis
+%          - Generic (non-venous) voxels: FA-based shape filtering
+%          - Venous voxels (near veins mask): permissive filter (FA bypassed)
 %       6. Refine in pathological regions
-%       7. Classify vessels by diameter
 %
-%   See also: vesselness3D, refineVessels, classifyVesselsByDiameter
+%   See also: vesselness3D, refineVessels, classifyVesselsByDiameter, classifyVesselsByType
 
 fprintf('  Segmenting pulmonary vessels...\n');
 
@@ -64,15 +69,17 @@ vesselsSeg.vesselness = vesselnessEnhanced;
 fprintf('    Thresholding vesselness response...\n');
 
 % Initial binary segmentation from vesselness
-vesselsInitialSeg = vesselnessEnhanced > params.vessels.threshold.initial;
+vesselsRawThreshold = vesselnessEnhanced > params.vessels.threshold.initial;
 
-% Reconstruct vessels brainching from the mediastinal region
-% seedMask = distanceMasks.close;
+% Save the raw threshold before reconstruction (needed for post-trachea refinement)
+vesselsSeg.rawThreshold = vesselsRawThreshold;
+
+% Reconstruct vessels branching from the mediastinal region
 % Dilate the "close" mask slightly to serve as seeds
 seedMask = imdilate(distanceMasks.close, strel('sphere', 3));
-vesselsInitialSeg = imreconstruct(seedMask, vesselsInitialSeg, 26);
+vesselsInitialSeg = imreconstruct(seedMask, vesselsRawThreshold, 26);
 
-% Store initial segmentation
+% Store initial segmentation (after reconstruction)
 vesselsSeg.preliminary = vesselsInitialSeg;
 
 %% Extract skeleton and diameter information
@@ -132,20 +139,50 @@ vesselsEnds0 = vesselsEnds;
 vesselsEnds0(branchpointsImage ~= 0) = 0;
 vesselsEnds0 = imreconstruct(endpointsImage, vesselsEnds0, 26);
 
-% Filter loops and ends by anisotropy
-vesselsLoopsKeep = filterSmallVessels(vesselsLoops, injurySeg.dense, params);
-vesselsEndsKeep = filterSmallVessels(vesselsEnds0, injurySeg.dense, params);
+% --- Artery / vein pre-split ---
+% Pulmonary veins run inter-segmentally and do not follow the bronchial
+% tree. Their peripheral branches frequently appear as "loops" (both ends
+% connect to existing vasculature, leaving no free endpoint) or as short
+% "ends" not anchored to the main arterial tree. Applying the same FA-based
+% filter to veins would cause systematic over-discarding of true venous
+% inter-segmental bridges.
+%
+% Strategy: split loops and ends by overlap with the TS vein mask (dilated
+% by 1 voxel to absorb boundary differences). Apply the standard
+% filterSmallVessels to the generic (non-venous) subset and a more
+% permissive filterVenousVessels to the venous subset.
+veinsMaskDil = imdilate(volumes.veins, strel('sphere', params.vessels.graph.venous.maskDilSize));
 
-% Extremities originating from main vasculature (always keep)
+loopsGeneric = vesselsLoops & ~veinsMaskDil;
+loopsVenous  = vesselsLoops &  veinsMaskDil;
+endsGeneric  = vesselsEnds0 & ~veinsMaskDil;
+endsVenous   = vesselsEnds0 &  veinsMaskDil;
+
+% Generic filter (FA-based, unchanged)
+[loopsGenericKeep, loopsGenericDiscard] = filterSmallVessels(loopsGeneric, injurySeg.dense, params);
+[endsGenericKeep,  endsGenericDiscard]  = filterSmallVessels(endsGeneric,  injurySeg.dense, params);
+
+% Venous filter (permissive: no FA check, consolidation rule only)
+[loopsVenousKeep, loopsVenousDiscard] = filterVenousVessels(loopsVenous, injurySeg.dense);
+[endsVenousKeep,  endsVenousDiscard]  = filterVenousVessels(endsVenous,  injurySeg.dense);
+
+% Extremities originating from main vasculature (always keep, valid for
+% both arteries and veins that happen to be connected to the main tree)
 vesselsEndsFromMain = imreconstruct(skeletonImageMainDil, vesselsEnds);
 
 % Combine kept structures
-vesselsToKeep = mainVasculature | ...
-    vesselsLoopsKeep | ...
-    vesselsEndsKeep | ...
-    vesselsEndsFromMain;
+vesselsToKeep = mainVasculature      | ...
+                loopsGenericKeep     | ...
+                loopsVenousKeep      | ...
+                endsGenericKeep      | ...
+                endsVenousKeep       | ...
+                vesselsEndsFromMain;
 
 vesselsToKeep = bwareaopen(vesselsToKeep, params.vessels.graph.keepVolume);
+
+% Combine discarded structures (loop/end classification)
+vesselsToDiscard = loopsGenericDiscard | loopsVenousDiscard | ...
+                   endsGenericDiscard  | endsVenousDiscard;
 
 %% Reconstruct full vessels from skeleton
 fprintf('    Reconstructing full vessels...\n');
@@ -158,14 +195,28 @@ lbl_dist = lbl_dist .* uint32(vesselsReconstruction);
 reco_indexes = find(vesselsToKeep);
 vesselsUpdate = ismember(lbl_dist, reco_indexes);
 
+% Reconstruct discarded vessels (for downstream use in pathological zone and complete vessels)
+discard_indexes = find(vesselsToDiscard);
+loopEndDiscarded = ismember(lbl_dist, discard_indexes);
+vesselsSeg.loopEndDiscarded = loopEndDiscarded;
+
 %% Refine vessels near airways
 fprintf('    Refining vessels near airways...\n');
 
-% Recover missed vessels along airways (bronchovascular bundles)
+% Recover missed vessels along airways (bronchovascular bundles).
+% Constrained to arterial territory: pulmonary arteries travel alongside
+% bronchi (bronchovascular bundle), while veins run inter-segmentally and
+% are not spatially coupled to airways. Applying this recovery to veins
+% would risk pulling in fibrotic bands or consolidated tissue near bronchi.
+% A 1-voxel dilation of the TS artery mask accounts for minor boundary
+% differences between the deep-learning segmentation and the Jerman output.
+arteriesMask = imdilate(volumes.arteries, strel('sphere', 1));
+
 vesselsNearAirways = recoverVesselsNearAirways(vesselsUpdate, ...
     airwaysSeg.airways, ...
     diameterImage, ...
     params);
+vesselsNearAirways = vesselsNearAirways & arteriesMask;
 
 vesselsUpdate = vesselsUpdate | vesselsNearAirways;
 
@@ -199,7 +250,7 @@ fprintf('    Multi-threshold vessel refinement in pathological zones...\n');
 
 [vesselsUpdate, pathZoneDiscarded] = refineVesselsInPathologicalZones(...
     vesselsUpdate, vesselnessEnhanced, lungsProcessed.binary, ...
-    injurySeg, airwaysSeg, distanceMasks, params);
+    injurySeg, airwaysSeg, distanceMasks, loopEndDiscarded, params);
 
 vesselsSeg.pathZoneDiscarded = pathZoneDiscarded;
 
@@ -233,23 +284,58 @@ fprintf('    Vessel segmentation complete!\n');
 
 end
 
-%% Helper function: Filter small vessels by anisotropy
-function vesselsKeep = filterSmallVessels(vesselsMask, consolidationMask, params)
-    % Filter small vessels based on size, location, and anisotropy
+%% Helper function: Filter small vessels by anisotropy (generic / arterial)
+function [vesselsKeep, vesselsDiscard] = filterSmallVessels(vesselsMask, consolidationMask, params)
+    % Filter small vessels based on size, location, and anisotropy.
+    % Used for generic (non-venous) loops and ends.
 
-    % Very small loops (< 7 voxels) - keep
+    % Very small structures (< 7 voxels) - keep
     vesselsSmall = vesselsMask & ~bwareaopen(vesselsMask, 7);
 
-    % Large loops in compromised tissue (>= 15 voxels) - discard
+    % Large structures in compromised tissue (>= 15 voxels) - discard
     vesselsLarge = bwareaopen(vesselsMask, 15);
     vesselsLarge(consolidationMask == 0) = 0;
 
     % Medium-sized - filter by anisotropy
     vesselsMedium = vesselsMask & ~(vesselsSmall | vesselsLarge);
-    [vesselsMediumKeep, ~] = filterByAnisotropy(vesselsMedium, ...
+    [vesselsMediumKeep, vesselsMediumDiscard] = filterByAnisotropy(vesselsMedium, ...
         params.vessels.anisotropy.final);
 
-    vesselsKeep = vesselsSmall | vesselsMediumKeep;
+    vesselsKeep    = vesselsSmall | vesselsMediumKeep;
+    vesselsDiscard = vesselsLarge | vesselsMediumDiscard;
+end
+
+
+%% Helper function: Filter venous loops/ends (permissive — no FA check)
+function [vesselsKeep, vesselsDiscard] = filterVenousVessels(vesselsMask, consolidationMask)
+    % Permissive filter for structures overlapping the TS vein mask.
+    %
+    % Pulmonary veins run inter-segmentally: their peripheral branches can
+    % appear as topological loops (no free endpoint) or short ends not
+    % connected to the arterial main tree. Both patterns produce low FA
+    % at curved or branching segments, causing systematic over-discarding
+    % when the standard FA-based filter is applied.
+    %
+    % Rules:
+    %   < 7 voxels              → Keep  (same as generic filter)
+    %   >= 15 voxels in consol. → Discard (consolidation false-positive
+    %                             risk is unchanged regardless of vessel type)
+    %   everything else         → Keep  (FA check bypassed: overlap with the
+    %                             TS vein mask is sufficient evidence of
+    %                             true vascular origin)
+
+    % Very small structures (< 7 voxels) - keep
+    vesselsSmall = vesselsMask & ~bwareaopen(vesselsMask, 7);
+
+    % Large structures in compromised tissue (>= 15 voxels) - discard
+    vesselsLarge = bwareaopen(vesselsMask, 15);
+    vesselsLarge(consolidationMask == 0) = 0;
+
+    % Remaining structures: keep without FA filtering
+    vesselsRest = vesselsMask & ~(vesselsSmall | vesselsLarge);
+
+    vesselsKeep    = vesselsSmall | vesselsRest;
+    vesselsDiscard = vesselsLarge;
 end
 
 
@@ -274,7 +360,8 @@ end
 
 %% Helper function: Multi-threshold vessel refinement in pathological zones
 function [vesselsUpdate, pathZoneDiscarded] = refineVesselsInPathologicalZones(...
-    vesselsUpdate, vesselnessEnhanced, lungsbin, injurySeg, airwaysSeg, distanceMasks, params)
+    vesselsUpdate, vesselnessEnhanced, lungsbin, injurySeg, airwaysSeg, ...
+    distanceMasks, loopEndDiscarded, params)
     % Applies increasing vesselness requirements in pathological zones
     % to remove false positive vessels (reticulations, consolidation leakage).
     % Implements 4 sub-steps with different vesselness thresholds:
@@ -282,6 +369,7 @@ function [vesselsUpdate, pathZoneDiscarded] = refineVesselsInPathologicalZones(.
     %   #1: Outer borders + bright structures in far region
     %   #2: Near honeycombing → require vesselness > 0.85
     %   #3: General consolidation → require vesselness > 0.80
+    % Also includes loop/end discarded vessels from the graph analysis step.
 
     pz = params.vessels.pathZone;
 
@@ -320,8 +408,9 @@ function [vesselsUpdate, pathZoneDiscarded] = refineVesselsInPathologicalZones(.
     discard3 = consolidation;
     discard3(vesselnessEnhanced > pz.vesselness80) = 0;
 
-    % Combine all discard zones
-    allDiscard = logical(discard3) | logical(discard0) | logical(discard1) | logical(discard2);
+    % Combine all discard zones (including loop/end discards from graph analysis)
+    allDiscard = logical(discard3) | logical(discard0) | logical(discard1) | ...
+        logical(discard2) | loopEndDiscarded;
 
     % Track what was removed for downstream reclassification
     pathZoneDiscarded = vesselsUpdate & allDiscard;

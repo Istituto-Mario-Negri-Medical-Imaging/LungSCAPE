@@ -10,10 +10,10 @@
 # ---- PYTHON PACKAGES ----
 # Install with: pip install -r requirements.txt
 
-TotalSegmentator>=2.0
+TotalSegmentator>=2.13.0
 nibabel>=4.0
 numpy>=1.21
-nnunetv2>=2.0
+nnunetv2>=2.3.1   # also installed transitively by TotalSegmentator; required directly by run_model201.py / run_model191.py
 antspyx>=0.4.0
 
 # Note: TotalSegmentator will automatically install its own dependencies

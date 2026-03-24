@@ -18,7 +18,9 @@ function volumes = loadPatientVolumes(patientData)
 %           .lungs         - Lung segmentation (uint8: 0=bg, 1=right, 2=left)
 %           .lobes         - Lobe segmentation (uint8: 1-5 for lobes)
 %           .airways       - Airway segmentation (uint8 binary)
-%           .vessels       - Vessel segmentation (uint8 binary)
+%           .arteries      - Pulmonary arteries mask (uint8 binary, masked to lungs)
+%           .veins         - Pulmonary veins mask (uint8 binary, masked to lungs)
+%           .vessels       - Combined vessels mask (arteries | veins, masked to lungs)
 %           .consolidation - Consolidation/dense opacities mask (uint8 binary)
 %           .injury        - high attenuation abnormalities (uint8 binary)
 %           .hasLobes      - Boolean indicating if lobes are available
@@ -56,10 +58,22 @@ fprintf('  Loading airway segmentation...\n');
 airwayNii = load_untouch_nii(patientData.files.airway);
 volumes.airways = uint8(airwayNii.img);
 
-%% Load Vessels (Required)
-fprintf('  Loading vessels segmentation...\n');
-vesselsNii = load_untouch_nii(patientData.files.vessels);
-volumes.vessels = uint8(vesselsNii.img);
+%% Load Arteries and Veins (Required)
+% TotalSegmentator >=2.13.0 provides separate artery/vein segmentations.
+% Both are masked to the lung parenchyma to remove extraparenchymal structures,
+% then combined into a single vessel mask used by the downstream pipeline.
+lungMask = volumes.lungs > 0;
+
+fprintf('  Loading arteries segmentation...\n');
+arteriesNii = load_untouch_nii(patientData.files.arteries);
+volumes.arteries = uint8(arteriesNii.img) & lungMask;
+
+fprintf('  Loading veins segmentation...\n');
+veinsNii = load_untouch_nii(patientData.files.veins);
+volumes.veins = uint8(veinsNii.img) & lungMask;
+
+% Combined vessel mask (preserves backward compatibility with downstream modules)
+volumes.vessels = volumes.arteries | volumes.veins;
 
 %% Load Lobes (Optional)
 if isfield(patientData.files, 'lobes')

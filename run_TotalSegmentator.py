@@ -1,8 +1,30 @@
 import os
+import sys
 import argparse
 import subprocess
 import nibabel as nib
 import numpy as np
+from packaging.version import Version
+
+# Minimum TotalSegmentator version: lung_vessels task produces separate
+# artery, vein and airway outputs starting from v2.13.0.
+_TS_MIN_VERSION = "2.13.0"
+try:
+    import totalsegmentator
+    _ts_version = Version(totalsegmentator.__version__)
+    if _ts_version < Version(_TS_MIN_VERSION):
+        sys.exit(
+            f"ERROR: TotalSegmentator >= {_TS_MIN_VERSION} is required "
+            f"(found {_ts_version}).\n"
+            "The lung_vessels task produces separate artery/vein/airway outputs "
+            f"starting from v{_TS_MIN_VERSION}.\n"
+            f"Upgrade with: pip install 'TotalSegmentator>={_TS_MIN_VERSION}'"
+        )
+except ImportError:
+    sys.exit(
+        "ERROR: TotalSegmentator is not installed.\n"
+        f"Install with: pip install 'TotalSegmentator>={_TS_MIN_VERSION}'"
+    )
 
 
 LOBE_FILES = [
@@ -34,7 +56,12 @@ def aggregate_lobes(patient_dir):
 
 
 def process_patient(ct_path, patient_dir, patient_id, use_ts_airways=False):
-    """Run TotalSegmentator (lobes + lung_vessels) and produce final outputs."""
+    """Run TotalSegmentator (lobes + lung_vessels) and produce final outputs.
+
+    TotalSegmentator >=2.13.0: --ta lung_vessels produces lung_arteries.nii.gz,
+    lung_veins.nii.gz, and lung_airways.nii.gz (replacing the former
+    lung_vessels.nii.gz and lung_trachea_bronchia.nii.gz outputs).
+    """
     os.makedirs(patient_dir, exist_ok=True)
 
     # --- Run TotalSegmentator ---
@@ -60,20 +87,24 @@ def process_patient(ct_path, patient_dir, patient_id, use_ts_airways=False):
     nib.save(lungs_nii, os.path.join(patient_dir, f"{patient_id}_lungsTS.nii.gz"))
 
     os.rename(
-        os.path.join(patient_dir, "lung_vessels.nii.gz"),
-        os.path.join(patient_dir, f"{patient_id}_vesselsTS.nii.gz"),
+        os.path.join(patient_dir, "lung_arteries.nii.gz"),
+        os.path.join(patient_dir, f"{patient_id}_arteriesTS.nii.gz"),
+    )
+    os.rename(
+        os.path.join(patient_dir, "lung_veins.nii.gz"),
+        os.path.join(patient_dir, f"{patient_id}_veinsTS.nii.gz"),
     )
 
-    trachea_bronchia_path = os.path.join(patient_dir, "lung_trachea_bronchia.nii.gz")
+    airways_path = os.path.join(patient_dir, "lung_airways.nii.gz")
     if use_ts_airways:
         os.rename(
-            trachea_bronchia_path,
+            airways_path,
             os.path.join(patient_dir, f"{patient_id}_airwaysTS.nii.gz"),
         )
     else:
         # Airways will be provided by nnU-Net Model201; discard TotalSegmentator output
-        if os.path.exists(trachea_bronchia_path):
-            os.remove(trachea_bronchia_path)
+        if os.path.exists(airways_path):
+            os.remove(airways_path)
 
     # --- Remove intermediate per-lobe files ---
     for filename, _ in LOBE_FILES:
@@ -82,7 +113,7 @@ def process_patient(ct_path, patient_dir, patient_id, use_ts_airways=False):
             os.remove(path)
 
     airways_source = "_airwaysTS" if use_ts_airways else "(airways from Model201, not TS)"
-    print(f"  Saved: {patient_id}_lobesTS / _lungsTS / _vesselsTS / {airways_source}")
+    print(f"  Saved: {patient_id}_lobesTS / _lungsTS / _arteriesTS / _veinsTS / {airways_source}")
 
 
 def find_patients_from_data_dir(data_dir):

@@ -43,6 +43,22 @@ params.voxel.vz = voxelDimensions(3);
 params.voxel.dimensions = voxelDimensions;
 params.voxel.volume = abs(voxelDimensions(1) * voxelDimensions(2) * voxelDimensions(3));
 
+% Extract spatial origin from NIfTI header for NRRD output alignment.
+% Priority: sform (code 3, affine in scanner coords) > qform (code 2) > zero fallback.
+if nii.hdr.hist.sform_code > 0
+    params.voxel.origin = [nii.hdr.hist.srow_x(4), ...
+                           nii.hdr.hist.srow_y(4), ...
+                           nii.hdr.hist.srow_z(4)];
+elseif nii.hdr.hist.qform_code > 0
+    params.voxel.origin = [nii.hdr.hist.qoffset_x, ...
+                           nii.hdr.hist.qoffset_y, ...
+                           nii.hdr.hist.qoffset_z];
+else
+    params.voxel.origin = [0, 0, 0];
+    warning('getProcessingParameters:NoSpatialOrigin', ...
+        'No sform or qform found in NIfTI header; NRRD origin set to [0 0 0].');
+end
+
 %% Filtering Parameters (Anisotropic Diffusion)
 params.filtering.kappa = 1;           % Edge preservation parameter
 params.filtering.gamma = 3/44;        % Time step
@@ -144,6 +160,9 @@ params.vessels.graph.mainVolume = 300;        % Minimum volume for main vascular
 params.vessels.graph.keepVolume = 15;         % Minimum volume for final vascular skeleton
 params.vessels.graph.diameter.small = 2;      % Small vessel diameter threshold
 params.vessels.graph.diameter.main = 2.5;     % Main branch diameter
+% Venous loop/end filter: dilation of TS vein mask for overlap detection
+% (absorbs boundary differences between TS segmentation and Jerman output)
+params.vessels.graph.venous.maskDilSize = 1;  % Dilation radius (voxels)
 
 % Multi-threshold vessel refinement in pathological zones
 params.vessels.pathZone.vesselness85 = 0.85;         % Vesselness threshold for distal consolidation and honeycombing (#0, #2)
@@ -155,12 +174,53 @@ params.vessels.pathZone.farDilateSize = 5;           % Dilation for far_LungsCen
 params.vessels.cleaning.injuryRegionVolume = 100;   % Remove small vessels in injury regions
 params.vessels.cleaning.finalMinVolume = 30;        % Remove small fragments in final vessels
 
-% Large vessel detection
-params.vessels.largeVessels.MinHU = -600;     % Minimum HU for large vessel detection
-params.vessels.largeVessels.MaxHU = 100;      % Maximum HU for large vessel detection
-params.vessels.largeVessels.diameter = 8;     % Min diameter for large vessel detection
-params.vessels.largeVessels.minLength = 5;    % Min length for large vessel detection
-params.vessels.largeVessels.minVol = 30;      % Min volume for large vessel detection
+% Complete vessels in healthy tissue (adaptive thresholding + vesselness integration)
+params.vessels.completeVessels.bsapxMinVol = 7000;         % Min vol for base/apex detection (8-conn)
+params.vessels.completeVessels.borderDilate0 = 5;          % Border dilation outside base/apex
+params.vessels.completeVessels.borderDilate1 = 2;          % Border dilation inside base/apex
+params.vessels.completeVessels.minVol = 15;                % Min volume for adaptive threshold result
+params.vessels.completeVessels.volThr = 30;                % Min volume after all integration
+params.vessels.completeVessels.minVolFibrotic = 15;        % Min volume for fibrotic check
+% Honeycombing walls masking (narrow bright structures to near-cyst regions)
+params.vessels.completeVessels.honeycomb.minAirSegVol = 1000; % Min AirSeg volume for honeycombing
+params.vessels.completeVessels.honeycomb.minAreaVol = 6;      % Min area for 8-conn cleanup
+params.vessels.completeVessels.honeycomb.maxDist = 2.5;       % Max distance from AirSeg for walls
+params.vessels.completeVessels.honeycomb.minOutThrVol = 200;  % Min volume for masked bright structures
+% Vesselness on filtered volume (double threshold)
+params.vessels.completeVessels.frangi.scale = 0.5;         % Scale for vesselness on filtered volume
+params.vessels.completeVessels.frangi.spacingZmult = 2;    % z-spacing multiplier (vz * 2)
+params.vessels.completeVessels.frangi.highThr = 0.70;      % High vesselness threshold (reconstructed from close|midfar)
+params.vessels.completeVessels.frangi.lowThr = 0.40;       % Low vesselness threshold (non-consolidation)
+% Fibrotic check vesselness (separate pass on fibrotic structures)
+params.vessels.completeVessels.fibroticFrangi.scale = 0.5; % Scale for fibrotic check vesselness
+params.vessels.completeVessels.fibroticFrangi.thr = 0.70;  % Threshold for fibrotic vesselness
+% Binary vesselness to connect fragmented tracts
+params.vessels.completeVessels.binaryFrangi.scales = [0.5, 1]; % Scales for Jerman on combined binary
+params.vessels.completeVessels.binaryFrangi.thr = 0.70;        % Threshold for binary vesselness
+% FA check #1: small objects with large diameter and low anisotropy
+params.vessels.completeVessels.faCheck1.maxVol = 100;      % Max vol for FA check #1
+params.vessels.completeVessels.faCheck1.minDiam = 3;       % Min diameter for FA check #1
+params.vessels.completeVessels.faCheck1.FA = 0.94;         % FA threshold for FA check #1
+% FA check #2: border+far objects with low anisotropy (inverted)
+params.vessels.completeVessels.faCheck2.maxVol = 500;      % Max vol for FA check #2
+params.vessels.completeVessels.faCheck2.minVol = 100;      % Min vol for border seed
+params.vessels.completeVessels.faCheck2.FA = 0.95;         % FA threshold (inverted: FA < this → discard)
+
+% Vessel type classification (artery / vein)
+% maxDistVox is used only as tiebreaker for voxels reachable from both
+% artery and vein anchors, or for components disconnected from all anchors.
+% Primary classification is topological (imreconstruct propagation).
+params.vessels.typeClassification.maxDistVox = 10; % Max distance (voxels) for distance fallback
+
+% Large vessel lumen recovery (TS-based, TotalSegmentator >=2.13.0)
+% Replaces previous HU thresholding + airways-proximity heuristics.
+% The artery/vein masks from TS are used directly as candidate pool;
+% Jerman diameter seeds anchor the reconstruction to confirmed large vessels.
+params.vessels.largeVessels.diamSeedLow  = 3.5;  % Jerman skeleton diameter (mm) for add2Final seeds
+params.vessels.largeVessels.diamSeedHigh = 4.5;  % Jerman skeleton diameter (mm) for largeVessels seeds
+params.vessels.largeVessels.diamSeedMinVol = 100; % Min volume for diameter seeds (6-conn)
+params.vessels.largeVessels.minVol = 30;          % Min volume for large vessel final cleanup (6-conn)
+params.vessels.largeVessels.wallDist = 1.5;       % Distance (mm) for large vessel wall extension
 
 % Large consolidation reclassification
 params.vessels.largeConsol.minHU = -150;              % HU threshold for dense consolidation
@@ -224,6 +284,17 @@ params.vessels.lastCorr.seed.maxVol = 1000;           % Max vol for seed cleanup
 params.vessels.lastCorr.final.maxVol = 150;           % Max vol for final check
 params.vessels.lastCorr.final.minDiam = 3.5;          % Min diameter for final check
 params.vessels.lastCorr.final.FA = 0.94;              % FA threshold for final check
+
+% Post-trachea vessel refinement (second pass near airways)
+params.vessels.postTrachea.mainDiamThr = 2;              % Min diameter for main vessels on skeleton
+params.vessels.postTrachea.airwaysMinDist = 2;            % Min distance from airways (exclude walls)
+params.vessels.postTrachea.airwaysMaxDist = 6;            % Max distance from airways
+params.vessels.postTrachea.cystsMinVol = 150;             % Min vol for pathological airways (honeycombing)
+params.vessels.postTrachea.cystsMaxDist = 2;              % Max distance from pathological airways
+params.vessels.postTrachea.cysts2MinAirSegVol = 30;       % Min AirSeg vol for cyst2 detection (4-conn)
+params.vessels.postTrachea.cysts2MaxDist = 1.5;           % Max distance from AirSeg cysts
+params.vessels.postTrachea.cysts2SmallVesselMaxVol = 100; % Max vessel vol for small vessel check (6-conn)
+params.vessels.postTrachea.cysts2MinOverlapVol = 5;       % Min overlap vol for cyst2 removal
 
 %% Fissure Segmentation Parameters (morphological lobe boundary approach)
 params.fissures.dilationSize = 2;             % Dilation disk size 

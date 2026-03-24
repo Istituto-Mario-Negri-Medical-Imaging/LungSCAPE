@@ -21,11 +21,12 @@ function patientList = loadPatientData(dataDirectory)
 %       │   ├── Patient001.nii.gz              (CT volume)
 %       │   ├── Patient001_lobesTS.nii.gz      (Lobes coarse segmentation)
 %       │   ├── Patient001_lungsTS.nii.gz      (Lungs coarse segmentation)
-%       │   ├── Patient001_vesselsTS.nii.gz    (Vessels coarse segmentation)
+%       │   ├── Patient001_arteriesTS.nii.gz   (Pulmonary arteries - TotalSegmentator >=2.13.0)
+%       │   ├── Patient001_veinsTS.nii.gz      (Pulmonary veins   - TotalSegmentator >=2.13.0)
 %       │   ├── Patient001_airways201.nii.gz   (Airways - nnU-Net Model201, preferred)
 %       │   ├── Patient001_airwaysTS.nii.gz    (Airways - TotalSegmentator, fallback)
 %       │   ├── Patient001_consolidation.nii.gz
-%       │   ├── Patient001_HighAttenuation.nii.gz
+%       │   ├── Patient001_highAttenuation191.nii.gz
 %       └── Patient002/
 %           └── ...
 %
@@ -108,9 +109,10 @@ patterns = struct(...
     'ct',            sprintf('%s.nii.gz', patientName), ...
     'lobes',         'lobesTS', ...
     'lungs',         'lungsTS', ...
-    'vessels',       'vesselsTS', ...
+    'arteries',      'arteriesTS', ...
+    'veins',         'veinsTS', ...
     'consolidation', 'consolidation', ...
-    'injury',        'HighAttenuation');
+    'injury',        'highAttenuation191');
 
 % Find CT volume (required)
 ctFiles = files(contains({files.name}, patterns.ct));
@@ -126,12 +128,19 @@ if isempty(lungsFiles)
 end
 fileStruct.lungs = fullfile(patientFolder, lungsFiles(1).name);
 
-% Find vessels segmentation (required)
-vesselsFiles = files(contains({files.name}, patterns.vessels));
-if isempty(vesselsFiles)
-    error('Vessels segmentation not found');
+% Find arteries segmentation (required)
+arteriesFiles = files(contains({files.name}, patterns.arteries));
+if isempty(arteriesFiles)
+    error('Arteries segmentation not found (expected arteriesTS from TotalSegmentator >=2.13.0)');
 end
-fileStruct.vessels = fullfile(patientFolder, vesselsFiles(1).name);
+fileStruct.arteries = fullfile(patientFolder, arteriesFiles(1).name);
+
+% Find veins segmentation (required)
+veinsFiles = files(contains({files.name}, patterns.veins));
+if isempty(veinsFiles)
+    error('Veins segmentation not found (expected veinsTS from TotalSegmentator >=2.13.0)');
+end
+fileStruct.veins = fullfile(patientFolder, veinsFiles(1).name);
 
 % Find airway segmentation (required)
 % Priority: Model201 (airways201) > TotalSegmentator (airwaysTS)

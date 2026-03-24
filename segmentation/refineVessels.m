@@ -12,11 +12,11 @@ function [vesselsRefined, largeVessels, addConsolidation] = refineVessels(vessel
 %   4. Eigenvector orientation filter (horizontal leakage removal)
 %   5. Seed-based cleanup of residual leakages
 %   6. Large consolidation reclassification (dense tissue misclassified as vessels)
-%   7. Large vessel reconstruction for structures missed by Jerman filter
+%   7. Large vessel reconstruction (TS artery+vein masks via morphological reconstruction)
 %
 %   Inputs:
 %       vesselsSeg     - Structure with .final, .vesselness fields
-%       volumes        - Structure with .filtered, .ct fields
+%       volumes        - Structure with .filtered, .ct, .arteries, .veins fields
 %       lungsProcessed - Structure with .binary, .original fields
 %       airwaysSeg     - Structure with .airways field
 %       injurySeg      - Structure with .dense, .ggo fields
@@ -39,6 +39,25 @@ lc = params.vessels.lastCorr;
 %% Initialize working copy
 vessels = vesselsSeg.final;
 
+%% Honeycombing walls masking (narrow bright structures mask to honeycombing region)
+fprintf('    Masking honeycombing walls...\n');
+cv = params.vessels.completeVessels;
+
+honeycombingWallsMask = false(size(lungsbin));
+if isfield(injurySeg, 'lowAttenuation') && any(injurySeg.lowAttenuation(:))
+    honeycombingLargeAirSeg = bwareaopen(injurySeg.lowAttenuation, cv.honeycomb.minAirSegVol);
+    honeycombingLargeAirSeg = bwareaopen(honeycombingLargeAirSeg, cv.honeycomb.minAreaVol, 8);
+    [airSegDist, ~] = bwdist(single(honeycombingLargeAirSeg));
+    honeycombingWallsMask = airSegDist < cv.honeycomb.maxDist & airSegDist > 0;
+end
+
+% Narrow bright structures to honeycombing walls region
+brightStructuresMasked = false(size(lungsbin));
+if isfield(injurySeg, 'brightstructures') && any(injurySeg.brightstructures(:))
+    brightStructuresMasked = logical(injurySeg.brightstructures) & honeycombingWallsMask;
+    brightStructuresMasked = bwareaopen(brightStructuresMasked, cv.honeycomb.minOutThrVol);
+end
+
 %% Adaptive thresholding for complete vessels in healthy tissue
 fprintf('    Applying adaptive thresholding in healthy tissue...\n');
 
@@ -49,25 +68,153 @@ masks.far = distanceMasks.far;
 
 completeVessels = adaptiveVesselThreshold(volumes.filtered, masks, params);
 
-% Vesselness filtering on adaptive threshold result
-fprintf('    Applying vesselness filter to complete vessels...\n');
-completeVesselsFrangi = vesselness3D(completeVessels, ...
-    [0.5, 1], ...
-    [params.voxel.px; params.voxel.py; params.voxel.vz], ...
-    0.5, true);
-
-completeVessels = completeVesselsFrangi > params.vessels.threshold.complete;
-
-% Check for fibrotic bands (near consolidation)
+% Fibrotic check: near-consolidation portion of adaptive threshold
+fibroticCheck = false(size(lungsbin));
 if isfield(injurySeg, 'dense') && any(injurySeg.dense(:))
     fibroticCheck = imreconstruct(uint8(injurySeg.dense), ...
         uint8(completeVessels), 26);
-    fibroticCheck(vesselsSeg.vesselness > 0.8) = 0;
-    completeVessels = completeVessels & ~fibroticCheck;
 end
 
-% Combine with vessels from segmentVessels
-vessels = vessels | completeVessels;
+% Remove pathological vessels and consolidation from complete vessels
+completeVessels = imbinarize(completeVessels);
+if isfield(vesselsSeg, 'pathZoneDiscarded')
+    completeVessels = completeVessels & ~vesselsSeg.pathZoneDiscarded;
+end
+if isfield(injurySeg, 'dense')
+    completeVessels = completeVessels & ~logical(injurySeg.dense);
+end
+
+% Remove near-airway region
+[airwaysDist_cv, ~] = bwdist(single(airwaysSeg.airways));
+outROI = airwaysDist_cv < 3 & airwaysDist_cv > 0;
+completeVessels = completeVessels & ~outROI;
+
+% Remove fissures
+if any(fissures(:))
+    completeVessels = completeVessels & ~fissures;
+end
+
+% Border cleanup
+outBorders2_cv = bwmorph3(imfill(lungsbin, 8, 'holes'), 'remove');
+lungs_R_cv = lungsProcessed.original == 1; lungs_R_cv(lungsbin == 0) = 0;
+lungs_L_cv = lungsProcessed.original == 2; lungs_L_cv(lungsbin == 0) = 0;
+lungs_R_bsapx_cv = lungs_R_cv & ~bwareaopen(lungs_R_cv, cv.bsapxMinVol, 8);
+lungs_L_bsapx_cv = lungs_L_cv & ~bwareaopen(lungs_L_cv, cv.bsapxMinVol, 8);
+lungs_bsapx_cv = lungs_R_bsapx_cv | lungs_L_bsapx_cv;
+cleanBorders0_cv = imdilate(outBorders2_cv, strel('disk', cv.borderDilate0));
+cleanBorders1_cv = imdilate(outBorders2_cv, strel('disk', cv.borderDilate1));
+cleanBorders0_cv(lungs_bsapx_cv ~= 0) = 0;
+cleanBorders1_cv(lungs_bsapx_cv == 0) = 0;
+cleanBorders_cv = cleanBorders0_cv | cleanBorders1_cv;
+cleanBorders_cv(lungsbin == 0) = 0;
+completeVessels = completeVessels & ~cleanBorders_cv;
+
+% Keep fibrotic check only within complete vessels, then remove from complete
+fibroticCheck = logical(fibroticCheck) & completeVessels;
+completeVessels = completeVessels & ~fibroticCheck;
+completeVessels = bwareaopen(completeVessels, cv.minVol);
+
+%% Vesselness on filtered volume (double threshold)
+fprintf('    Applying vesselness on filtered volume...\n');
+
+% Vesselness on filtered volume with adjusted z-spacing (vz*2)
+completeVesselsFrangi0 = vesselness3D(volumes.filtered, cv.frangi.scale, ...
+    [params.voxel.px; params.voxel.py; params.voxel.vz * cv.frangi.spacingZmult], ...
+    params.vessels.jerman.tau, true);
+
+% High threshold reconstructed from mediastinal region
+completeVesselsFrangi1 = completeVesselsFrangi0 > cv.frangi.highThr;
+completeVesselsFrangi1 = imreconstruct((distanceMasks.close | distanceMasks.midfar), ...
+    completeVesselsFrangi1, 26);
+
+% Low threshold in non-consolidation
+completeVesselsFrangi0(logical(injurySeg.dense)) = 0;
+completeVesselsFrangi0 = completeVesselsFrangi0 > cv.frangi.lowThr;
+
+completeVesselsFrangi = completeVesselsFrangi0 | completeVesselsFrangi1;
+completeVesselsFrangi = completeVesselsFrangi & ~cleanBorders_cv;
+if any(fissures(:))
+    completeVesselsFrangi = completeVesselsFrangi & ~fissures;
+end
+if isfield(vesselsSeg, 'loopEndDiscarded')
+    completeVesselsFrangi = completeVesselsFrangi & ~vesselsSeg.loopEndDiscarded;
+end
+
+%% Separate fibrotic check vesselness
+fprintf('    Applying vesselness on fibrotic check...\n');
+if isfield(injurySeg, 'dense')
+    fibroticCheck(logical(injurySeg.dense)) = 0;
+end
+fibroticCheckFrangi = vesselness3D(fibroticCheck, cv.fibroticFrangi.scale, ...
+    [params.voxel.px; params.voxel.py; params.voxel.vz], ...
+    params.vessels.jerman.tau, true);
+fibroticCheck = fibroticCheckFrangi > cv.fibroticFrangi.thr;
+fibroticCheck = fibroticCheck & ~vessels;
+fibroticCheck = bwareaopen(fibroticCheck, cv.minVolFibrotic);
+
+%% Combine all vessel sources
+completeVessels = completeVessels | fibroticCheck;
+completeVessels = completeVessels | completeVesselsFrangi;
+completeVessels = completeVessels | vessels;
+completeVessels = completeVessels & ~brightStructuresMasked;
+
+% Jerman filter on the combined binary to connect fragmented tracts
+fprintf('    Connecting fragmented tracts with Jerman filter...\n');
+completeVesselsFrangiConn = vesselness3D(completeVessels, cv.binaryFrangi.scales, ...
+    [params.voxel.px; params.voxel.py; params.voxel.vz], ...
+    params.vessels.jerman.tau, true);
+completeVesselsFinal = completeVesselsFrangiConn > cv.binaryFrangi.thr;
+
+vessels = completeVesselsFinal | vessels;
+vessels = bwareaopen(vessels, cv.volThr);
+
+%% FA check #1: Small objects with large diameter and low anisotropy
+fprintf('    FA check on small objects after integration...\n');
+cleanFA1 = bwareaopen(vessels, cv.faCheck1.maxVol);
+checkFA1 = vessels & ~cleanFA1;
+diamFA1 = 2 * bwdist(~checkFA1);
+skelFA1 = bwskel(checkFA1);
+bpFA1 = bwmorph3(skelFA1, 'branchpoints');
+skelFA1(bpFA1 ~= 0) = 0;
+diamSkelFA1 = diamFA1 .* double(skelFA1);
+seedFA1 = diamSkelFA1 > cv.faCheck1.minDiam;
+
+checkLblFA1 = bwlabeln(seedFA1);
+checkEigFA1 = regionprops3(checkLblFA1, 'EigenValues');
+idxKeepFA1 = false(1, size(checkEigFA1, 1));
+for i = 1:size(checkEigFA1, 1)
+    eigenvalues = checkEigFA1.EigenValues{i};
+    FAval = computeFractionalAnisotropy(eigenvalues);
+    if FAval > cv.faCheck1.FA
+        idxKeepFA1(i) = true;
+    end
+end
+discardFA1 = seedFA1 & ~ismember(checkLblFA1, find(idxKeepFA1));
+discardFA1 = imreconstruct(discardFA1, checkFA1, 26);
+vessels = vessels & ~discardFA1;
+
+%% FA check #2: Border+far objects with low anisotropy (inverted)
+fprintf('    FA check on border objects (inverted)...\n');
+checkFA2 = vessels;
+checkFA2_small = checkFA2 & ~bwareaopen(checkFA2, cv.faCheck2.maxVol);
+checkFA2(cleanBorders_cv == 0) = 0;
+checkFA2(distanceMasks.far == 0) = 0;
+checkFA2 = bwareaopen(checkFA2, cv.faCheck2.minVol);
+checkFA2 = imreconstruct(checkFA2, checkFA2_small, 26);
+discardFA2 = checkFA2;
+
+checkLblFA2 = bwlabeln(discardFA2);
+checkEigFA2 = regionprops3(checkLblFA2, 'EigenValues');
+idxKeepFA2 = false(1, size(checkEigFA2, 1));
+for i = 1:size(checkEigFA2, 1)
+    eigenvalues = checkEigFA2.EigenValues{i};
+    FAval = computeFractionalAnisotropy(eigenvalues);
+    if FAval < cv.faCheck2.FA
+        idxKeepFA2(i) = true;
+    end
+end
+discardFA2 = ismember(checkLblFA2, find(idxKeepFA2));
+vessels = vessels & ~discardFA2;
 
 %% Pre-wall reassignment
 fprintf('    Pre-wall reassignment of small consolidation fragments...\n');
@@ -303,11 +450,11 @@ addConsolidation = addConsolidation | largeConsol0;
 
 %% Add large vessels that may have been missed by the Jerman filter
 fprintf('    Segmenting large vessels from intensity...\n');
-largeVessels = addLargeVessels(volumes, lungsProcessed, vessels, ...
+[largeVessels, add2Final] = addLargeVessels(volumes, lungsProcessed, vessels, ...
     airwaysSeg, distanceMasks, params);
 
-% Combine large vessels with refined vessels
-vessels = vessels | largeVessels;
+% Add2Final goes into the main vessel segmentation
+vessels = vessels | add2Final;
 
 %% Last removal of false positives
 fprintf('    Last removal of false positives...\n');
@@ -385,7 +532,7 @@ end
 
 
 %% Helper: Adaptive vessel thresholding in healthy tissue
-function completeVessels = adaptiveVesselThreshold(volumeFiltered, masks, params)
+function completeVessels = adaptiveVesselThreshold(volumeFiltered, masks, ~)
     C = 180;
     ksize = 15;
     sigma = 0.3 * ((ksize - 1) * 0.5 - 1) + 0.8;
@@ -405,51 +552,75 @@ function completeVessels = adaptiveVesselThreshold(volumeFiltered, masks, params
         output = 255 .* (src <= (smooth - C));
         completeVessels(:, :, k) = uint8(output .* (ROIslice > 0));
     end
-
-    % Clean up borders
-    if isfield(masks, 'far')
-        lungs_R = masks.lungs == 1;
-        lungs_L = masks.lungs == 2;
-
-        lungs_R_bsapx = lungs_R & ~bwareaopen(lungs_R, 7000, 8);
-        lungs_L_bsapx = lungs_L & ~bwareaopen(lungs_L, 7000, 8);
-        lungs_bsapx = lungs_R_bsapx | lungs_L_bsapx;
-
-        cleanBorders0 = imdilate(masks.far, strel('disk', 5));
-        cleanBorders1 = imdilate(masks.far, strel('disk', 2));
-        cleanBorders0(lungs_bsapx ~= 0) = 0;
-        cleanBorders1(lungs_bsapx == 0) = 0;
-        cleanBorders = cleanBorders0 | cleanBorders1;
-        cleanBorders(masks.lungs == 0) = 0;
-
-        completeVessels(cleanBorders ~= 0) = 0;
-    end
-
-    completeVessels = logical(completeVessels);
 end
 
-%% Helper: Add large vessels
-function largeVessels = addLargeVessels(volumes, lungsProcessed, vesselsUpdate, ...
-    airwaysSeg, distanceMasks, params)
+%% Helper: Recover large vessel lumen from TotalSegmentator artery/vein masks
+function [largeVessels, add2Final] = addLargeVessels(volumes, lungsProcessed, ...
+    vesselsUpdate, airwaysSeg, distanceMasks, params)
+%
+% TotalSegmentator >=2.13.0 provides separate artery and vein masks at full
+% lumen resolution. These are used directly as the candidate pool for large
+% vessel recovery, replacing the previous HU-based thresholding (HU > -100,
+% fill, HU > -200) which risked including consolidated tissue and relied on
+% airways-proximity heuristics that are only valid for arteries.
+%
+% The Jerman-refined segmentation is used to derive diameter seeds that
+% anchor the reconstruction: only TS regions corroborated by an already-
+% identified large Jerman vessel (diameter > threshold) are recovered.
+% This prevents TS false positives (e.g. mediastinal remnants not masked
+% out by the lung mask) from entering the final segmentation.
+%
+% Outputs:
+%   largeVessels - Hilar/central large vessel lumen (for wall computation
+%                  in finalizeSegmentations). Anchored to high-diameter
+%                  seeds (> diamSeedHigh). Separate from main vessels.
+%   add2Final    - Mid-to-large vessel lumen added to main segmentation.
+%                  Anchored to lower-diameter seeds (> diamSeedLow).
 
-    largeVessels0 = volumes.filtered > params.vessels.largeVessels.MinHU & ...
-                    volumes.filtered < params.vessels.largeVessels.MaxHU;
-    largeVessels0(lungsProcessed.binary == 0) = 0;
-    largeVessels0 = largeVessels0 & ~airwaysSeg.airways;
+    lv = params.vessels.largeVessels;
+    lungsbin = lungsProcessed.binary;
 
-    [diameterImage, ~] = computeVesselDiameter(largeVessels0, 0);
+    % Combined TS mask (arteries | veins), already masked to lung parenchyma
+    % by loadPatientVolumes. Serves as the pool from which lumen is recovered.
+    tsCombined = logical(volumes.arteries) | logical(volumes.veins);
 
-    diameterImageLarge = diameterImage > params.vessels.largeVessels.diameter;
-    diameterImageLarge = bwareaopen(diameterImageLarge, ...
-        params.vessels.largeVessels.minLength, 26);
+    % --- Diameter seeds from Jerman-refined vessels ---
+    % Two-level seeding: require diameter > diamSeedLow (3.5mm) connected
+    % to a region with diameter > diamSeedHigh (4.5mm), to avoid expanding
+    % into small vessel territory.
+    diamVess    = 2 * bwdist(~vesselsUpdate);
+    skelVess    = bwskel(vesselsUpdate);
+    diamImgVess = diamVess .* double(skelVess);
 
-    [largeDist, ~] = bwdist(single(diameterImageLarge));
-    largeDistMask = largeDist < 3 & largeDist > 0;
-    largeVessels = largeVessels0 & (largeDistMask | diameterImageLarge);
-    largeVessels = imreconstruct(diameterImageLarge, largeVessels, 8);
+    seedLow  = imdilate(diamImgVess > lv.diamSeedLow,  strel('sphere', 1));
+    seedHigh = imdilate(diamImgVess > lv.diamSeedHigh, strel('sphere', 1));
+    seedLow  = imreconstruct(seedHigh, seedLow, 26);
+    seedLow  = bwareaopen(seedLow, lv.diamSeedMinVol, 6);
+    seedHigh = bwareaopen(seedHigh, lv.diamSeedMinVol, 6);
+
+    % --- add2Final: TS lumen anchored to seedLow, rooted in mediastinum ---
+    % Recovers lumen of mid-to-large vessels missed by Jerman erosion.
+    add2Final = imreconstruct(seedLow, tsCombined, 26);
+    add2Final = imreconstruct(distanceMasks.close, add2Final, 26);
+    add2Final = add2Final & lungsbin;
+
+    % --- largeVessels: TS lumen anchored to seedHigh only ---
+    % Captures hilar/central large vessels for separate wall computation.
+    largeVessels = imreconstruct(seedHigh, tsCombined, 26);
     largeVessels = imreconstruct(distanceMasks.close, largeVessels, 26);
 
+    % Cleanup: remove airways overlap, far region, small fragments
     largeVessels = largeVessels & ~airwaysSeg.airways;
-    largeVessels = bwareaopen(largeVessels, params.vessels.largeVessels.minVol, 6);
+    largeVessels = largeVessels & ~distanceMasks.far;
+    largeVessels = bwareaopen(largeVessels, lv.minVol, 6);
+
+    % Extend largeVessels with TS voxels within wall distance (accounts for
+    % slight boundary offsets between TS mask and Jerman segmentation)
+    [largeVesselsDist, ~] = bwdist(single(largeVessels));
+    largeVesselsWalls = largeVesselsDist < lv.wallDist & largeVesselsDist > 0;
+    largeVessels = largeVessels | (tsCombined & largeVesselsWalls);
+
+    % Mutual exclusivity and overlap with Jerman vessels
+    largeVessels = largeVessels & ~add2Final;
     largeVessels = largeVessels & ~vesselsUpdate;
 end
