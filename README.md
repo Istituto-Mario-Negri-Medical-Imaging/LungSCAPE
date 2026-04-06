@@ -1,7 +1,7 @@
 <h1 align="center">LungSCAPE</h1>
 
 <p align="center">
-  <img src="images/lungscape_illustration.png" alt="Logo" width="600">
+  <img src="images/lungscape_illustration2.png" alt="Logo" width="700">
 </p>
 
 # a Comprehensive and Automatic PipelinE for Lung Segmentation
@@ -13,6 +13,8 @@ Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
 LungSCAPE is a two-stage hybrid pipeline for comprehensive segmentation of lung structures from pathological chest HRCT scans. 
 Deep learning models generate initial segmentations in Python, which are then refined and combined using a MATLAB processing module using morphological operations, vesselness filtering, and graph-based analysis.
+
+Acknowledgment — TotalSegmentator (https://github.com/wasserth/totalsegmentator). The Python preprocessing stage relies extensively on TotalSegmentator (Wasserthal et al., Radiology: Artificial Intelligence, 2023, doi:10.1148/ryai.230024) for lung, lobe, and pulmonary vessel segmentation. LungSCAPE builds upon these initial segmentations with refinement, reclassification, and integration steps. We gratefully acknowledge the TotalSegmentator project and encourage users to cite it alongside LungSCAPE when using this pipeline.
 
 The pipeline segments:
 - **Airways** and trachea (with wall detection)
