@@ -1,13 +1,12 @@
 <h1 align="center">LungSCAPE</h1>
 
 <p align="center">
-  <img src="images/lungscape_illustration2.png" alt="Logo" width="700">
+  <img src="images/lungscape_logo.png" alt="Logo" width="600">
 </p>
 
-# a Comprehensive and Automatic PipelinE for Lung Segmentation
+<h1 align="center">Comprehensive and Automatic PipelinE for Lung Segmentation</h1>
 
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
-
 
 ## Overview
 
