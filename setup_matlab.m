@@ -13,7 +13,7 @@
 % What is checked:
 %   1. MATLAB toolboxes: Image Processing, Parallel Computing
 %   2. External libraries: NIfTI tools, anisodiff3D, vesselness3D
-%      (including MEX compilation of eig3volume.c), nrrdWriter, Image Graphs
+%      (including MEX compilation of eig3volume.c), Image Graphs
 %
 % If a library is missing:
 %   - The download URL and installation instructions are printed.
@@ -99,15 +99,6 @@ else
              '       mex eig3volume.c\n' ...
              '     A C compiler must be configured (run ''mex -setup'' if needed).\n\n']);
     issues{end+1} = 'vesselness3D not found (vesselness3D.m + eig3volume MEX both missing).';
-end
-
-% --- nrrdWriter ---
-ok = checkFunction('nrrdWriter', 'nrrdWriter');
-if ~ok
-    fprintf(['  -> Download from: https://mathworks.com/matlabcentral/fileexchange/48621\n' ...
-             '     Unzip into a folder and add it to the MATLAB path:\n' ...
-             '       addpath(genpath(''/path/to/nrrdWriter''))\n\n']);
-    issues{end+1} = 'nrrdWriter not found.';
 end
 
 % --- Image Graphs ---

@@ -15,6 +15,7 @@ nibabel>=4.0
 numpy>=1.21
 nnunetv2>=2.3.1   # also installed transitively by TotalSegmentator; required directly by run_model201.py / run_model191.py
 antspyx>=0.4.0
+packaging                # version checking in run_TotalSegmentator.py
 
 # Note: TotalSegmentator will automatically install its own dependencies
 # (PyTorch, onnxruntime, etc.)
@@ -35,5 +36,4 @@ antspyx>=0.4.0
 #   - anisodiff3D: 3D anisotropic diffusion filter
 #   - vesselness3D: Jerman vessel enhancement filter
 #     Reference: Jerman et al., IEEE TMI 2016
-#   - nrrdWriter: NRRD file export utility
 #   - Image Graphs: create and visualize graphs based on image pixel neighbor relationships (Steve Eddins (2026), https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs)

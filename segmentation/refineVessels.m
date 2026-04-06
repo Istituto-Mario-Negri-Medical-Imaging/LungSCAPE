@@ -451,7 +451,7 @@ addConsolidation = addConsolidation | largeConsol0;
 %% Add large vessels that may have been missed by the Jerman filter
 fprintf('    Segmenting large vessels from intensity...\n');
 [largeVessels, add2Final] = addLargeVessels(volumes, lungsProcessed, vessels, ...
-    airwaysSeg, distanceMasks, params);
+    airwaysSeg, injurySeg, distanceMasks, params);
 
 % Add2Final goes into the main vessel segmentation
 vessels = vessels | add2Final;
@@ -554,73 +554,140 @@ function completeVessels = adaptiveVesselThreshold(volumeFiltered, masks, ~)
     end
 end
 
-%% Helper: Recover large vessel lumen from TotalSegmentator artery/vein masks
+%% Helper: Recover large vessel lumen from HU-based solid-tissue candidates
 function [largeVessels, add2Final] = addLargeVessels(volumes, lungsProcessed, ...
-    vesselsUpdate, airwaysSeg, distanceMasks, params)
+    vesselsUpdate, airwaysSeg, injurySeg, distanceMasks, params)
 %
-% TotalSegmentator >=2.13.0 provides separate artery and vein masks at full
-% lumen resolution. These are used directly as the candidate pool for large
-% vessel recovery, replacing the previous HU-based thresholding (HU > -100,
-% fill, HU > -200) which risked including consolidated tissue and relied on
-% airways-proximity heuristics that are only valid for arteries.
+% Builds a solid-tissue candidate pool from HU thresholding (HU > huMin1),
+% hole-filling, and pruning (HU > huMin2), then constrains it by distance
+% from Jerman skeleton-derived large-diameter seeds. This compensates for
+% the attenuated Jerman response at the centre of very large vessels and
+% for any gaps in the main filter-based segmentation.
 %
-% The Jerman-refined segmentation is used to derive diameter seeds that
-% anchor the reconstruction: only TS regions corroborated by an already-
-% identified large Jerman vessel (diameter > threshold) are recovered.
-% This prevents TS false positives (e.g. mediastinal remnants not masked
-% out by the lung mask) from entering the final segmentation.
+% Two-level seeding (seedLow / seedHigh) anchors the reconstruction to
+% confirmed large-calibre regions and prevents expansion into small vessels.
+% Three additional sources supplement the core:
+%   - 4-conn expansion: contiguous lumen beyond the distance gate, filtered
+%     against large consolidations to limit leakage.
+%   - Bronchial seed (largeVesselsAdd0): pulmonary arteries run alongside
+%     large bronchi (bronchovascular bundle). A corona around large-calibre
+%     airways (diameter > bronchDiamThr, distance < bronchCrownDist) seeds
+%     an 8-conn growth in the HU pool, recovering vessel lumen that the
+%     Jerman skeleton seeds alone may miss.
+%   - LargeVessels1 wall-zone addition: a permissive intermediate
+%     segmentation (seedLow only, no distance gate) is computed and its
+%     intersection with a narrow corona around the already-confirmed
+%     largeVessels is added back. This recovers partial-volume lumen at the
+%     vessel boundary that the stricter distance gate excluded.
 %
 % Outputs:
-%   largeVessels - Hilar/central large vessel lumen (for wall computation
-%                  in finalizeSegmentations). Anchored to high-diameter
-%                  seeds (> diamSeedHigh). Separate from main vessels.
-%   add2Final    - Mid-to-large vessel lumen added to main segmentation.
-%                  Anchored to lower-diameter seeds (> diamSeedLow).
+%   largeVessels - Hilar/central large vessel lumen for wall computation in
+%                  finalizeSegmentations. NOT added to the main segmentation.
+%   add2Final    - Mid-to-large vessel lumen added to the main segmentation.
+%                  Anchored directly to the mediastinal region (close mask).
 
     lv = params.vessels.largeVessels;
     lungsbin = lungsProcessed.binary;
 
-    % Combined TS mask (arteries | veins), already masked to lung parenchyma
-    % by loadPatientVolumes. Serves as the pool from which lumen is recovered.
-    tsCombined = logical(volumes.arteries) | logical(volumes.veins);
-
-    % --- Diameter seeds from Jerman-refined vessels ---
-    % Two-level seeding: require diameter > diamSeedLow (3.5mm) connected
-    % to a region with diameter > diamSeedHigh (4.5mm), to avoid expanding
-    % into small vessel territory.
+    %% Diameter seeds from Jerman-refined vessels
+    % seedLow : diam > diamSeedLow (3.5 mm), retained only where connected to seedHigh
+    % seedHigh: diam > diamSeedHigh (4.5 mm) — used to constrain seedLow
     diamVess    = 2 * bwdist(~vesselsUpdate);
     skelVess    = bwskel(vesselsUpdate);
     diamImgVess = diamVess .* double(skelVess);
 
     seedLow  = imdilate(diamImgVess > lv.diamSeedLow,  strel('sphere', 1));
     seedHigh = imdilate(diamImgVess > lv.diamSeedHigh, strel('sphere', 1));
-    seedLow  = imreconstruct(seedHigh, seedLow, 26);
+    seedLow  = imreconstruct(seedHigh, seedLow, 26);  % keep only parts connected to high-diam
+    clear seedHigh;
     seedLow  = bwareaopen(seedLow, lv.diamSeedMinVol, 6);
-    seedHigh = bwareaopen(seedHigh, lv.diamSeedMinVol, 6);
 
-    % --- add2Final: TS lumen anchored to seedLow, rooted in mediastinum ---
-    % Recovers lumen of mid-to-large vessels missed by Jerman erosion.
-    add2Final = imreconstruct(seedLow, tsCombined, 26);
-    add2Final = imreconstruct(distanceMasks.close, add2Final, 26);
-    add2Final = add2Final & lungsbin;
+    %% HU-based solid-tissue pool
+    huLumen0 = volumes.ct > lv.huMin1;
+    huLumen0 = huLumen0 & lungsbin;
+    huLumen0 = imfill(huLumen0, 8, 'holes');
+    huLumen0(volumes.ct < lv.huMin2) = 0;
 
-    % --- largeVessels: TS lumen anchored to seedHigh only ---
-    % Captures hilar/central large vessels for separate wall computation.
-    largeVessels = imreconstruct(seedHigh, tsCombined, 26);
+    %% LargeVessels1: permissive intermediate (seedLow only, no distance gate)
+    % Grows from seedLow into the full HU pool without the distance constraint
+    % applied to the main largeVessels. Used later to recover partial-volume
+    % lumen within the wall zone of the confirmed vessel region.
+    largeVessels1 = imreconstruct(seedLow, huLumen0, 8);
+    largeVessels1 = imreconstruct(distanceMasks.close, largeVessels1, 26);
+
+    %% Distance gate from seedLow
+    [seedLowDist, ~] = bwdist(single(seedLow));
+    huGate_large = seedLowDist <= lv.huSeedDistLarge & seedLowDist > 0;
+    huGate_add   = seedLowDist <  lv.huSeedDistAdd   & seedLowDist > 0;
+
+    %% largeVessels: grow from seedLow within the 3.5 mm-gated HU pool,
+    %  then keep only components connected to the mediastinal region.
+    %  8-connectivity (consistent with ORIGINAL) limits diagonal growth,
+    %  keeping the core region topologically close to the confirmed seeds.
+    huCand_large = huLumen0 & (huGate_large | seedLow);
+    largeVessels = imreconstruct(seedLow, huCand_large, 8);
     largeVessels = imreconstruct(distanceMasks.close, largeVessels, 26);
 
-    % Cleanup: remove airways overlap, far region, small fragments
-    largeVessels = largeVessels & ~airwaysSeg.airways;
+    %% Narrow 4-conn expansion into the full HU pool + consolidation filtering
+    % The expansion captures contiguous lumen beyond the distance gate while
+    % the 4-connectivity keeps it topologically close to the confirmed region.
+    % Only the expanded portion (not the core) is filtered against consolidation.
+    huLargeExp     = imreconstruct(largeVessels, huLumen0, 4);
+    huLargeExpOnly = huLargeExp & ~largeVessels;
+
+    if any(injurySeg.dense(:))
+        consolBig      = bwareaopen(logical(injurySeg.dense), lv.huConsolMinVol, 6);
+        huLargeRem     = imreconstruct(consolBig, huLargeExpOnly, 6);
+        huLargeExpOnly = huLargeExpOnly & ~huLargeRem;
+    end
+    largeVessels = largeVessels | huLargeExpOnly;
+
+    %% Bronchial seed (largeVesselsAdd0)
+    % Pulmonary arteries travel alongside large bronchi (bronchovascular bundle).
+    % A corona around large-calibre airways seeds an 8-conn growth in the HU
+    % pool, recovering vessel lumen adjacent to the bronchial tree that is not
+    % reachable from the Jerman diameter seeds alone.
+    diamAw    = 2 * bwdist(~logical(airwaysSeg.airways));
+    skelAw    = bwskel(logical(airwaysSeg.airways));
+    diamImgAw = diamAw .* double(skelAw);
+
+    largeAw = diamImgAw > lv.bronchDiamThr;
+    largeAw = imreconstruct(largeAw, logical(airwaysSeg.airways), 8);
+    largeAw = imreconstruct(distanceMasks.close, largeAw, 26);
+
+    [awCrownDist, ~] = bwdist(single(largeAw));
+    bronchialCrown = awCrownDist < lv.bronchCrownDist & awCrownDist > 0;
+    largeVesselsAdd0 = imreconstruct(bronchialCrown, huLumen0, 8);
+    largeVessels = largeVessels | largeVesselsAdd0;
+    clear diamAw skelAw diamImgAw largeAw awCrownDist bronchialCrown largeVesselsAdd0;
+
+    %% LargeVessels1 wall-zone addition
+    % The intersection of the permissive intermediate with a narrow corona
+    % around the confirmed largeVessels recovers partial-volume lumen at the
+    % vessel boundary that the stricter distance gate had excluded.
+    [lv1Dist, ~] = bwdist(single(largeVessels));
+    lv1WallZone = lv1Dist < lv.lv1WallDist & lv1Dist > 0;
+    largeVessels = largeVessels | (largeVessels1 & lv1WallZone);
+    clear lv1Dist lv1WallZone largeVessels1;
+
+    %% add2Final: HU pool within 3 mm of seedLow, anchored directly to mediastinum
+    % More conservative than largeVessels (tighter gate, no seed-grow step).
+    huCand_add = huLumen0 & (huGate_add | seedLow);
+    add2Final  = imreconstruct(distanceMasks.close, huCand_add, 26);
+    add2Final  = add2Final & lungsbin;
+
+    %% Airway exclusion (approximate wall proxy; precise exclusion in finalizeSegmentations)
+    [awDist, ~] = bwdist(single(airwaysSeg.airways));
+    awWallApprox = awDist < lv.awWallDist & awDist > 0;
+    largeVessels = largeVessels & ~awWallApprox & ~airwaysSeg.airways;
+    add2Final    = add2Final    & ~airwaysSeg.airways;
+
+    %% Far region and size cleanup
     largeVessels = largeVessels & ~distanceMasks.far;
+    largeVessels = bwareaopen(largeVessels, 4,  4);   % remove isolated voxels (4-conn)
     largeVessels = bwareaopen(largeVessels, lv.minVol, 6);
 
-    % Extend largeVessels with TS voxels within wall distance (accounts for
-    % slight boundary offsets between TS mask and Jerman segmentation)
-    [largeVesselsDist, ~] = bwdist(single(largeVessels));
-    largeVesselsWalls = largeVesselsDist < lv.wallDist & largeVesselsDist > 0;
-    largeVessels = largeVessels | (tsCombined & largeVesselsWalls);
-
-    % Mutual exclusivity and overlap with Jerman vessels
+    %% Mutual exclusivity: largeVessels holds only what is NOT in add2Final or Jerman vessels
     largeVessels = largeVessels & ~add2Final;
     largeVessels = largeVessels & ~vesselsUpdate;
 end

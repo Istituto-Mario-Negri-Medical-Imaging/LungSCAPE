@@ -17,12 +17,11 @@ function labelMap = createLabelMap(segmentations, lungsbin)
 %           2 - Ground glass opacity (GGO)
 %           3 - Consolidation/Dense opacities
 %           4 - Air trapping/cysts
-%           5 - Vessels
+%           5 - Vessels (all sizes, including large hilar vessels)
 %           6 - Airways (bronchi)
 %           7 - Trachea
 %           8 - Airway walls
 %           9 - Trachea walls
-%          10 - Vessel walls
 %
 %   Priority (later labels override earlier):
 %       Background < Healthy < GGO < Consolidation < Air < Vessels < Airways
@@ -75,11 +74,6 @@ end
 % Label 9: Trachea walls
 if isfield(segmentations, 'tracheaWalls')
     labelMap(segmentations.tracheaWalls ~= 0) = 9;
-end
-
-% Label 10: Vessel walls
-if isfield(segmentations, 'vesselWalls')
-    labelMap(segmentations.vesselWalls ~= 0) = 10;
 end
 
 % Ensure background stays background, but preserve extra-pulmonary

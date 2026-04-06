@@ -1,17 +1,22 @@
-# LungSCAPE - Lung Segmentation: a Comprehensive and Automatic PipelinE
-Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
+<h1 align="center">LungSCAPE</h1>
 
 <p align="center">
-  <img src="images/lungscape_logo.png" alt="Logo" width="600">
+  <img src="images/lungscape_illustration.png" alt="Logo" width="600">
 </p>
+
+# a Comprehensive and Automatic PipelinE for Lung Segmentation
+
+Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
+
 
 ## Overview
 
-LungScape is a two-stage pipeline for comprehensive segmentation of lung structures from chest HRCT scans. Deep learning models (TotalSegmentator, nnU-Net) generate initial segmentations in Python, which are then refined and combined by a MATLAB processing engine using morphological operations, vesselness filtering, and graph-based analysis.
+LungSCAPE is a two-stage hybrid pipeline for comprehensive segmentation of lung structures from pathological chest HRCT scans. 
+Deep learning models generate initial segmentations in Python, which are then refined and combined using a MATLAB processing module using morphological operations, vesselness filtering, and graph-based analysis.
 
 The pipeline segments:
 - **Airways** and trachea (with wall detection)
-- **Pulmonary vessels** classified by diameter (large, medium, small) and by type (arteries, veins), with wall detection
+- **Pulmonary vessels** classified by diameter (large, medium, small) and by type (arteries, veins)
 - **Lung lobes** and interlobar fissures
 - **Pathological tissues**: reticulation/consolidations, ground glass opacities (GGO), air trapping
 - **Regional anatomical analysis**: Superior-Inferior, Posterior-Anterior, Left-Right divisions, and lobe-based analysis
@@ -46,14 +51,14 @@ DICOM Dataset
  +--------------------------+
        |
        v
- NRRD + MAT output files
+ NIfTI + MAT output files
 ```
 
 ## Project Structure
 
 ```
 LungScape/
-├── LungScape.m                     # Main MATLAB pipeline (17 steps)
+├── LungScape.m                     # Main MATLAB pipeline (15 steps + 2 sub-steps)
 ├── setup_matlab.m                  # MATLAB environment setup & dependency checker
 ├── run_pipeline.sh                 # Python pipeline orchestrator (Steps 0-3)
 ├── check_data_ready.py             # Pre-MATLAB data validation (verify DATA/ completeness)
@@ -70,7 +75,7 @@ LungScape/
 ├── io/
 │   ├── loadPatientData.m                 # Scan DATA directory, load patient info
 │   ├── loadPatientVolumes.m              # Load NIfTI volumes into MATLAB
-│   └── saveResults.m                     # Save NRRD and MAT results
+│   └── saveResults.m                     # Save NIfTI and MAT results
 ├── preprocessing/
 │   ├── preprocessLungs.m                 # Erode margins, separate L/R lungs
 │   ├── refineLobeSegmentation.m          # Fill gaps in lobe segmentation
@@ -81,6 +86,7 @@ LungScape/
 │   ├── classifyVesselsByDiameter.m       # Diameter-based vessel classification
 │   ├── refineAirways.m                   # Airway cleanup, honeycombing detection
 │   ├── segmentTrachea.m                  # Trachea identification and separation
+│   ├── postTracheaVesselRefinement.m     # Second-pass bronchovascular recovery
 │   ├── segmentFissures.m                 # Interlobar fissure detection
 │   ├── segmentInjuries.m                 # GGO, consolidation, air trapping
 │   ├── refineAirSeg.m                    # Low-attenuation refinement
@@ -95,8 +101,8 @@ LungScape/
     ├── classifyVesselsByType.m           # Artery/vein classification (topological + distance)
     ├── createRegionalMaps.m              # SI, PA, LR regional division
     ├── createLabelMap.m                  # Final label map generation
-    ├── binaryImageGraph3Weighted.m      # Weighted 3-D pixel graph (Image Graphs extension)
-    └── binaryImageGraphWeighted.m       # Weighted 2-D pixel graph (Image Graphs extension)
+    ├── binaryImageGraph3Weighted.m       # Weighted 3-D pixel graph (Image Graphs extension)
+    └── binaryImageGraphWeighted.m        # Weighted 2-D pixel graph (Image Graphs extension)
 ```
 
 ## Requirements
@@ -131,7 +137,6 @@ TotalSegmentator will automatically install PyTorch, nnunetv2, and its own depen
   - [NIfTI and ANALYZE tools](https://mathworks.com/matlabcentral/fileexchange/8797) (`load_untouch_nii`)
   - [anisodiff3D](https://it.mathworks.com/matlabcentral/fileexchange/14995-anisotropic-diffusion-perona-malik) - 3D anisotropic diffusion filter
   - [vesselness3D](https://it.mathworks.com/matlabcentral/fileexchange/63171-jerman-enhancement-filter) - Jerman vessel enhancement filter (Jerman et al., IEEE TMI 2016). **After installation, the MEX file must be compiled** by running `mex eig3volume.c` from within the library folder in MATLAB (requires a configured C compiler; run `mex -setup` if needed).
-  - [nrrdWriter](https://it.mathworks.com/matlabcentral/fileexchange/48621-nrrdwriter-filename-matrix-pixelspacing-origin-encoding) - NRRD file export utility
   - [Image Graphs](https://it.mathworks.com/matlabcentral/fileexchange/53614-image-graphs) - pixel neighbor graph analysis (must be on the MATLAB path). The repository includes `binaryImageGraph3Weighted.m` and `binaryImageGraphWeighted.m` in `utils/`, which are weighted extensions of Image Graphs functions and depend on it.
 
 To verify that all MATLAB dependencies are correctly installed, run the provided setup script:
@@ -392,7 +397,7 @@ LungScape
 ```
 
 **Behaviour notes:**
-- **Skip already processed patients**: if `Results/TotalLabelMap.nrrd` already exists in a patient folder, that patient is skipped automatically. To force re-processing, delete or rename the `Results/` folder.
+- **Skip already processed patients**: if `Results/TotalLabelMap.nii.gz` already exists in a patient folder, that patient is skipped automatically. To force re-processing, delete or rename the `Results/` folder.
 - **Log file**: a timestamped log (`lungscape_<YYYYMMDD_HHMMSS>.log`) is saved in `DATA_DIRECTORY` for each run.
 - **Parallel pool**: a single pool of `N_WORKERS` workers is shared across all patients in the batch.
 
@@ -424,13 +429,14 @@ Results are saved in `<PatientFolder>/Results/`:
 
 | File | Description |
 |------|-------------|
-| `TotalLabelMap.nrrd` | Complete segmentation (labels 0-10, see table below) |
-| `VesselsLabelMap.nrrd` | Vessel diameter classification (1=large, 2=medium, 3=small) |
-| `VesselsTypeMap.nrrd` | Vessel type classification (1=artery, 2=vein, 3=undetermined) |
-| `Vol_<Patient>.nrrd` | Filtered CT volume |
-| `<Patient>.mat` | Full MATLAB workspace (all maps, masks, parameters, metadata) |
+| `TotalLabelMap.nii.gz` | Complete segmentation (labels 0-9, see table below) |
+| `VesselCalibreMap.nii.gz` | Vessel diameter classification (see encoding below) |
+| `VesselsTypeMap.nii.gz` | Vessel type classification (see encoding below) |
+| `<Patient>.mat` | Full MATLAB workspace (all maps, masks, parameters, metadata — see contents below) |
 
-## Label Map Encoding
+## Output Encoding
+
+### TotalLabelMap
 
 | Label | Structure | Description |
 |-------|-----------|-------------|
@@ -444,7 +450,44 @@ Results are saved in `<PatientFolder>/Results/`:
 | 7 | Trachea | Main airway |
 | 8 | Airway walls | Bronchial walls |
 | 9 | Trachea walls | Tracheal walls |
-| 10 | Vessel walls | Vascular walls |
+
+### VesselCalibreMap
+
+Vessel diameter classification based on the BV5/BV10 framework (Estépar et al., *Am J Respir Crit Care Med*, 2013, [doi:10.1164/rccm.201209-1687OC](https://doi.org/10.1164/rccm.201209-1687OC)):
+
+| Label | Category | Diameter | Cross-sectional area |
+|-------|----------|----------|----------------------|
+| 1 | Large (BV10) | > 3.6 mm | > 10 mm² |
+| 2 | Medium (BV5–10) | 2.5–3.6 mm | 5–10 mm² |
+| 3 | Small (BV5) | ≤ 2.5 mm | ≤ 5 mm² |
+
+### VesselsTypeMap
+
+| Label | Type |
+|-------|------|
+| 0 | Not a vessel |
+| 1 | Artery |
+| 2 | Vein |
+| 3 | Undetermined |
+
+### MAT workspace contents
+
+The `<Patient>.mat` file contains the NIfTI outputs above plus additional maps not exported as standalone files:
+
+| Variable | Description |
+|----------|-------------|
+| `TotalLabelMap` | Same as `TotalLabelMap.nii.gz` |
+| `Vessels_classified` | Same as `VesselCalibreMap.nii.gz` |
+| `Vessels_type` | Same as `VesselsTypeMap.nii.gz` |
+| `SegmentsMapSI` | Superior-Inferior regional map (uint8): 1–3 = left lung (inferior → superior), 4–6 = right lung (inferior → superior) |
+| `SegmentsMapPA` | Posterior-Anterior regional map (uint8): 1–2 = left lung (anterior, posterior), 3–4 = right lung (anterior, posterior) |
+| `SegmentsMapLR` | Left-Right (medial-lateral) regional map (uint8): 1–2 = left lung (lateral, medial), 3–4 = right lung (lateral, medial) |
+| `distal_classification` | Distance-from-pleura classification (close, midfar, far zones) |
+| `LobesVolume` | Refined lobe segmentation (labels 1–5, empty if lobes unavailable) |
+| `Vol` | CT volume after preprocessing |
+| `lungs`, `lungsbin` | Original and processed lung masks |
+| `VoxelVolume`, `px`, `py`, `vz` | Voxel dimensions and volume (mm) |
+| `Parameters` | Full parameter structure used for processing |
 
 ## Configuration
 
@@ -455,13 +498,15 @@ All processing hyperparameters are centralized in `config/getProcessingParameter
 | **Filtering** | Anisotropic diffusion: kappa, gamma, radius, iterations |
 | **HU thresholds** | Air (-980), GGO (-700 to -200), consolidation (< -300), healthy (< -600) |
 | **Airways** | Min volume, honeycomb diameter (3.5-5 mm), FA threshold (0.90), wall distance |
-| **Vessels** | Jerman scales (0.5-1.5 mm), tau (0.5), FA thresholds (0.92-0.95), large vessel cutoff (> 8 mm); type classification max distance (10 vox) |
+| **Vessels** | Jerman scales (0.5-1.5 mm), tau (0.5), FA thresholds (0.92-0.95), large vessel cutoff (> 8 mm); diameter classification BV5/BV10 (2.5 / 3.6 mm); type classification max distance (10 vox) |
 | **Distance classification** | Close/midfar/far thresholds for multi-zone refinement |
 | **Morphology** | Structuring element sizes (voxel-aware, auto-adjusted for scanner resolution) |
 
+> **Note:** The current parameter values were defined empirically and validated on the datasets described in the reference publication. Different scanner models, acquisition protocols, reconstruction kernels, or patient populations may require adjustments. All parameters are collected in a single file (`getProcessingParameters.m`) to make such tuning straightforward — users are encouraged to review and adapt them to their own data.
+
 ## Citation
 
-If you use this code, please cite this github page!
+If you use LungSCAPE in your work, find it useful for your research, or build upon it for further development, please cite the corresponding publication: "Arrigoni, A. et al. Radiol med (2025)." - https://doi.org/10.1007/s11547-025-02166-w and the GitHub repository.
 
 ## License
 Apache-2.0 license
@@ -469,54 +514,9 @@ Apache-2.0 license
 ## Contact
 
 For questions or issues:
-- Alberto Arrigoni
+- Alberto Arrigoni (alberto.arrigoni@marionegri.it)
 
 ## Changelog
 
-### Version 2.5 (2026-03)
-- **`setup_matlab.m`** (new): pre-flight checker for MATLAB toolboxes (Image Processing, Parallel Computing) and external libraries (Jerman filter, vesselness3D + MEX, iso2mesh, NIfTI toolbox, jsonlab); prints actionable install instructions for each missing item
-- **`run_pipeline.sh`** (new): end-to-end shell orchestrator (Steps 0–3); arguments `--input`, `--output`, `--model201-dir`, `--model191-dir`; `--skip-model191` to bypass high-attenuation model; `--use-ts-airways`, `--no-cleanup`; auto-detects already-installed models; logs to `<output_dir>/pipeline.log`; calls `check_data_ready.py` on completion
-- **`check_data_ready.py`** (new): scans `DATA/` and reports per-patient readiness (`[READY]`/`[BLOCKED]`) based on required files (CT, lungsTS, arteriesTS, veinsTS, airways); non-zero exit if any patient is blocked
-- **TotalSegmentator ≥ 2.13.0** now required (was 2.5.0); `run_TotalSegmentator.py` performs a runtime version check and exits with a clear message if the requirement is not met; `requirements.txt` updated accordingly; `nnunetv2>=2.3.1` added as explicit requirement (also installed transitively by TotalSegmentator)
-- **NRRD spatial alignment**: `saveResults.m` now inverts the internal 90° rotation before writing all NRRD files and uses the NIfTI sform/qform origin (extracted in `getProcessingParameters.m` as `params.voxel.origin`) so that outputs overlay correctly on the source CT in 3D Slicer and other viewers
-- **`LungScape.m`**: added `N_WORKERS` constant (single source of truth for parallelism); parallel pool opened once before the patient loop and closed after; `diary` logging to `<DATA_DIRECTORY>/lungscape_<timestamp>.log`; skip-if-done guard at the start of `processPatient` (checks for `Results/TotalLabelMap.nrrd`)
-- **`Results/` folder**: output directory renamed from `InterimResults/` to `Results/` throughout `LungScape.m` and `saveResults.m`
-
-### Version 2.4 (2026-03)
-- `run_model201.py` / `run_model191.py`: added `--project-dir` argument (default: current working directory). When `nnUNet_INPUT/` and `DATA/` are found in the project directory, input files are automatically copied from `nnUNet_INPUT/` to `INPUT/` before inference, and outputs are automatically deployed to `DATA/PatientID/` using `case_mapping.json` — no manual renaming or file-moving required.
-
-### Version 2.3 (2026-03)
-- Updated TotalSegmentator requirement to >= 2.5.0: `lung_vessels` task now produces separate `lung_arteries.nii.gz` and `lung_veins.nii.gz` outputs
-- `run_TotalSegmentator.py`: replaced single vessel rename with two renames (`_arteriesTS`, `_veinsTS`); `lung_airways.nii.gz` replaces `lung_trachea_bronchia.nii.gz`
-- `loadPatientData.m` / `loadPatientVolumes.m`: load arteries and veins separately, mask to lung parenchyma, then combine into `volumes.vessels` for backward compatibility
-- `segmentVessels.m`: bronchovascular recovery (`recoverVesselsNearAirways`) now constrained to arterial territory; venous voxels in loop/end classification bypass FA filtering via new `filterVenousVessels` helper
-- `refineVessels.m` (`addLargeVessels`): replaced HU-threshold approach with TS-based morphological reconstruction from artery+vein masks, removing 7 obsolete parameters
-- `postTracheaVesselRefinement.m`: arterial mask constraint applied to bronchovascular recovery
-- Added Step 14b: `classifyVesselsByType` — two-phase artery/vein classification (topological propagation via `imreconstruct` from TS anchors, then distance fallback for conflicts and isolated components)
-- New output file: `VesselsTypeMap.nrrd` (0=non-vessel, 1=artery, 2=vein, 3=undetermined); `TotalLabelMap.nrrd` label 5 unchanged for backward compatibility
-- `saveResults.m`: saves `VesselsTypeMap.nrrd` and adds artery/vein/undetermined volume summary
-
-### Version 2.2 (2026-03)
-- Added nnU-Net Model201 for airways segmentation (`setup_model201.py`, `run_model201.py`)
-- Model201 is now the **default** airways source; TotalSegmentator airways available via `--use-ts-airways`
-- `loadPatientData.m` now prioritizes `airways201` over `airwaysTS` with automatic fallback
-- Updated pipeline step numbering and documentation accordingly
-
-### Version 2.1 (2026-02)
-- Added Step 0: `prepare_dataset.py` for DICOM-to-NIfTI conversion, resampling (512x512, 0.5mm z-spacing), and automatic working directory setup
-- `run_TotalSegmentator.py` now supports `--data-dir` mode to work directly on the DATA/ structure
-- Automatic nnU-Net INPUT folder preparation with case mapping
-
-### Version 2.0 (2026-01)
-- Major refactoring of original monolithic script into modular architecture
-- Added Python preprocessing scripts (`run_TotalSegmentator.py`, `setup_model191.py`, `run_model191.py`)
-- Centralized parameter management in `getProcessingParameters.m`
-- Complete vessel segmentation pipeline with Jerman filter and graph-based connectivity
-- Vessel diameter classification (large/medium/small)
-- Fissure segmentation
-- Airway, vessel, and trachea wall detection
-- Distance-based parenchyma classification for multi-threshold refinement
-- Regional anatomical maps (SI, PA, LR)
-
-### Version 1.0
-- Original implementation by Alberto Arrigoni
+### Version 1.0 (2026-04)
+- LungSCAPE launch

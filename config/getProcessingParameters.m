@@ -43,7 +43,7 @@ params.voxel.vz = voxelDimensions(3);
 params.voxel.dimensions = voxelDimensions;
 params.voxel.volume = abs(voxelDimensions(1) * voxelDimensions(2) * voxelDimensions(3));
 
-% Extract spatial origin from NIfTI header for NRRD output alignment.
+% Extract spatial origin from NIfTI header.
 % Priority: sform (code 3, affine in scanner coords) > qform (code 2) > zero fallback.
 if nii.hdr.hist.sform_code > 0
     params.voxel.origin = [nii.hdr.hist.srow_x(4), ...
@@ -56,7 +56,7 @@ elseif nii.hdr.hist.qform_code > 0
 else
     params.voxel.origin = [0, 0, 0];
     warning('getProcessingParameters:NoSpatialOrigin', ...
-        'No sform or qform found in NIfTI header; NRRD origin set to [0 0 0].');
+        'No sform or qform found in NIfTI header; origin set to [0 0 0].');
 end
 
 %% Filtering Parameters (Anisotropic Diffusion)
@@ -90,6 +90,8 @@ params.injury.histoMinHU = -970;              % Min HU for histogram analysis
 params.injury.histoMaxHU = -600;              % Max HU for histogram analysis
 params.injury.minSize6 = 35;                  % Min injury size (6-conn)
 params.injury.minSize4 = 16;                  % Min injury size (4-conn)
+params.injury.denseMinSize8 = 6;              % Min dense region size (8-conn)
+params.injury.denseMinSize6 = 35;             % Min dense region size (6-conn)
 params.injury.combingRecoMinVol = 500;        % Min volume for combing reconstruction seed (8-conn)
 
 %% Airway Segmentation Parameters
@@ -212,15 +214,32 @@ params.vessels.completeVessels.faCheck2.FA = 0.95;         % FA threshold (inver
 % Primary classification is topological (imreconstruct propagation).
 params.vessels.typeClassification.maxDistVox = 10; % Max distance (voxels) for distance fallback
 
-% Large vessel lumen recovery (TS-based, TotalSegmentator >=2.13.0)
-% Replaces previous HU thresholding + airways-proximity heuristics.
-% The artery/vein masks from TS are used directly as candidate pool;
-% Jerman diameter seeds anchor the reconstruction to confirmed large vessels.
-params.vessels.largeVessels.diamSeedLow  = 3.5;  % Jerman skeleton diameter (mm) for add2Final seeds
-params.vessels.largeVessels.diamSeedHigh = 4.5;  % Jerman skeleton diameter (mm) for largeVessels seeds
-params.vessels.largeVessels.diamSeedMinVol = 100; % Min volume for diameter seeds (6-conn)
-params.vessels.largeVessels.minVol = 30;          % Min volume for large vessel final cleanup (6-conn)
-params.vessels.largeVessels.wallDist = 1.5;       % Distance (mm) for large vessel wall extension
+% Vessel diameter classification thresholds (mm)
+% Based on the BV5/BV10 framework (Estépar et al., AJRCCM 2013):
+%   BV5:    CSA < 5 mm²   → diameter < 2.5 mm  (small)
+%   BV5-10: CSA 5-10 mm²  → diameter 2.5-3.6 mm (medium)
+%   BV10:   CSA > 10 mm²  → diameter > 3.6 mm  (large)
+params.vessels.diameterClassification.smallDiameterThreshold = 2.5;  % mm (CSA 5 mm²)
+params.vessels.diameterClassification.largeDiameterThreshold = 3.6;  % mm (CSA 10 mm²)
+
+% Large vessel lumen recovery (HU-based candidate pool)
+% Solid-tissue candidates (HU > huMin1, filled, pruned to HU > huMin2) are
+% constrained by distance from Jerman skeleton seeds, then reconstructed
+% from the mediastinum. A narrow 4-conn expansion adds contiguous lumen not
+% reached by the distance gate, filtered against large consolidations.
+params.vessels.largeVessels.diamSeedLow    = 3.5;  % Jerman skeleton diam (mm) threshold for seedLow
+params.vessels.largeVessels.diamSeedHigh   = 4.5;  % Jerman skeleton diam (mm) threshold for seedHigh
+params.vessels.largeVessels.diamSeedMinVol = 100;  % Min volume for diameter seeds (6-conn)
+params.vessels.largeVessels.minVol         = 30;   % Min volume for large vessel final cleanup (6-conn)
+params.vessels.largeVessels.huMin1         = -100; % Initial HU threshold for solid-tissue pool
+params.vessels.largeVessels.huMin2         = -200; % HU threshold applied after hole-filling (pruning)
+params.vessels.largeVessels.huSeedDistLarge = 3.5; % Max distance (mm) from seedLow → largeVessels gate
+params.vessels.largeVessels.huSeedDistAdd   = 3.0; % Max distance (mm) from seedLow → add2Final gate
+params.vessels.largeVessels.huConsolMinVol  = 300; % Min consolidation vol for 4-conn expansion filter (6-conn)
+params.vessels.largeVessels.awWallDist      = 2;   % Approximate airway wall exclusion distance (mm)
+params.vessels.largeVessels.bronchDiamThr   = 4;   % Min airway skeleton diameter (mm) for bronchial seed
+params.vessels.largeVessels.bronchCrownDist = 2.5; % Crown distance from large bronchi for bronchial seed (mm)
+params.vessels.largeVessels.lv1WallDist     = 1.5; % Wall-zone distance for LargeVessels1 addition (mm)
 
 % Large consolidation reclassification
 params.vessels.largeConsol.minHU = -150;              % HU threshold for dense consolidation
@@ -306,12 +325,15 @@ params.finalize.airwayWalls.largeAirwayDiam = 4;     % Min diameter for large ai
 params.finalize.airwayWalls.largeWallDist = 2.5;     % Wall distance for large airways
 params.finalize.airwayWalls.normalWallDist = 2;      % Wall distance for normal airways
 params.finalize.airwayWalls.tracheaWallDist = 2.5;   % Wall distance for trachea
-% Large vessel walls
-params.finalize.vesselWalls.largeDist = 1.5;         % Wall distance for large vessels
 % Fibrotic bands recovery
 params.finalize.fibrotic.C = 200;                    % Adaptive threshold constant
 params.finalize.fibrotic.kernelSize = 9;             % Gaussian kernel size
 params.finalize.fibrotic.minVol = 500;               % Min volume for fibrotic bands (6-conn)
+% Vessel guard zone for healthyToInjury reclassification
+params.finalize.vesselGuardDist = 1;                 % Min distance from vessel border (voxels)
+% Final size filter after all additions (post-reclassification + fibrotic bands)
+params.finalize.finalMinVol.dense = 20;              % Min volume for dense (6-conn)
+params.finalize.finalMinVol.ggo   = 30;              % Min volume for GGO (6-conn)
 
 %% Distance Classification Parameters (Close/Mid/Far from mediastinum)
 params.distance.closeThreshold = 0.5;         % Threshold for close region

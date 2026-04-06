@@ -3,17 +3,19 @@ function vesselsClassified = classifyVesselsByDiameter(vessels, params)
 %
 %   vesselsClassified = classifyVesselsByDiameter(vessels, params)
 %
-%   Classifies vessels into three diameter categories using sophisticated
-%   skeleton-based diameter estimation and nearest-neighbor propagation for
+%   Classifies vessels into three diameter categories using skeleton-based
+%   diameter estimation in mm and nearest-neighbor propagation for
 %   non-skeleton voxels. Uses parallel processing for efficiency.
 %
-%   Classification:
-%       Label 1: Large vessels (diameter > 6mm)
-%       Label 2: Medium vessels (2mm < diameter <= 6mm)
-%       Label 3: Small vessels (diameter <= 2mm)
+%   Classification (BV5/BV10 framework, Estépar et al. AJRCCM 2013):
+%       Label 1: Large vessels  — BV10  (diameter > 3.6 mm, CSA > 10 mm²)
+%       Label 2: Medium vessels — BV5-10 (2.5 mm < diameter <= 3.6 mm)
+%       Label 3: Small vessels  — BV5   (diameter <= 2.5 mm, CSA <= 5 mm²)
+%
+%   Diameters are measured in mm using the mean in-plane voxel spacing.
 %
 %   Algorithm:
-%       1. Compute diameter map from distance transform
+%       1. Compute diameter map in mm from distance transform × voxel spacing
 %       2. Extract skeleton and measure diameter at skeleton points
 %       3. Classify skeleton points by diameter
 %       4. Handle boundary cases (reclassify small fragments)
@@ -21,51 +23,46 @@ function vesselsClassified = classifyVesselsByDiameter(vessels, params)
 %
 %   Inputs:
 %       vessels - Binary vessel segmentation (logical)
-%       params  - Processing parameters with fields:
-%           .smallDiameterThreshold  - Threshold for small vessels (default: 2mm)
-%           .largeDiameterThreshold  - Threshold for large vessels (default: 6mm)
-%           .numWorkers             - Number of parallel workers (default: 3)
+%       params  - Processing parameters (see getProcessingParameters)
 %
 %   Outputs:
 %       vesselsClassified - Labeled volume (uint8):
 %           0 = background
-%           1 = large vessels (> 6mm)
-%           2 = medium vessels (2-6mm)
-%           3 = small vessels (<= 2mm)
-%
-%   Example:
-%       params.smallDiameterThreshold = 2;
-%       params.largeDiameterThreshold = 6;
-%       classified = classifyVesselsByDiameter(vessels, params);
-%       largeVessels = classified == 1;
-%       smallVessels = classified == 3;
+%           1 = large vessels  (BV10,  > 3.6 mm)
+%           2 = medium vessels (BV5-10, 2.5–3.6 mm)
+%           3 = small vessels  (BV5,   <= 2.5 mm)
 %
 %   See also: computeVesselDiameter, propagateLabelsNN
 
 fprintf('  Classifying vessels by diameter...\n');
 
-% Set default parameters
-if ~isfield(params, 'smallDiameterThreshold')
-    params.smallDiameterThreshold = 2;
-end
-if ~isfield(params, 'largeDiameterThreshold')
-    params.largeDiameterThreshold = 6;
-end
+% Diameter thresholds (mm)
+dp = params.vessels.diameterClassification;
+smallThr = dp.smallDiameterThreshold;   % mm
+largeThr = dp.largeDiameterThreshold;   % mm
 
-%% Compute diameter map
-fprintf('    Computing vessel diameter map...\n');
+%% Compute diameter map in mm
+fprintf('    Computing vessel diameter map (mm)...\n');
 
-diameter = 2 * bwdist(~vessels);
+% bwdist returns distances in voxel units. Convert to mm by scaling with
+% the mean in-plane spacing. On the skeleton the dominant cross-section is
+% transverse, so in-plane spacing is the appropriate metric. For nearly
+% isotropic in-plane voxels (px ≈ py) this is accurate; the z-spacing
+% contribution is negligible because skeleton points rarely have their
+% nearest border along z.
+voxelSpacing_mm = mean([params.voxel.px, params.voxel.py]);
+diameter = 2 * bwdist(~vessels) * voxelSpacing_mm;   % mm
 skeletonImage = bwskel(vessels);
 diameterImage = diameter .* double(skeletonImage);
+
+fprintf('    Voxel spacing used for diameter: %.3f mm (mean in-plane)\n', voxelSpacing_mm);
 
 %% Initial classification by diameter
 fprintf('    Classifying skeleton points by diameter...\n');
 
-diameterImageSmall = diameterImage <= params.smallDiameterThreshold & diameterImage > 0;
-diameterImageMid = diameterImage <= params.largeDiameterThreshold & ...
-    diameterImage > params.smallDiameterThreshold;
-diameterImageLarge = diameterImage > params.largeDiameterThreshold;
+diameterImageSmall = diameterImage <= smallThr & diameterImage > 0;
+diameterImageMid   = diameterImage <= largeThr & diameterImage > smallThr;
+diameterImageLarge = diameterImage > largeThr;
 
 %% Reclassify medium-sized fragments (span of tolerance)
 fprintf('    Reclassifying medium-sized fragments...\n');

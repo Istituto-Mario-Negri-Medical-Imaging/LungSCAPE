@@ -9,9 +9,8 @@ function segs = finalizeSegmentations(vessels, largeVessels, airways, trachea, .
 %   1. Airway walls computation with LargeAirways merge and validation
 %   2. Trachea walls computation with reconstruction
 %   3. First masking: remove airway walls from consolidation/GGO
-%   4. Large vessel walls computation
-%   5. Second masking: remove vessel walls from consolidation/GGO
-%   6. Fibrotic bands recovery via adaptive thresholding
+%   4. Large vessel lumen cleanup and masking of consolidation/GGO
+%   5. Fibrotic bands recovery via adaptive thresholding
 %
 %   Inputs:
 %       vessels       - Refined vessel segmentation (small/medium)
@@ -30,7 +29,7 @@ function segs = finalizeSegmentations(vessels, largeVessels, airways, trachea, .
 %   Output:
 %       segs - Structure with finalized segmentations:
 %           .vessels, .airways, .trachea, .dense, .ggo, .airSeg,
-%           .airwayWalls, .tracheaWalls, .vesselWalls
+%           .airwayWalls, .tracheaWalls
 %
 %   See also: refineVessels, createLabelMap
 
@@ -83,21 +82,17 @@ dense = dense & ~airwayWalls;
 ggo = ggo | dense;
 ggo = ggo & ~airwayWalls;
 
-%% 3. Large vessel walls
-fprintf('    Computing large vessel walls...\n');
-[largeVesselDist, ~] = bwdist(single(largeVessels));
-vesselWalls = largeVesselDist < fp.vesselWalls.largeDist & largeVesselDist > 0;
-
-%% 4. Second masking: consolidation/GGO -= vessel walls
-fprintf('    Second masking: removing vessel walls from pathology...\n');
-dense = dense & ~vesselWalls;
-ggo = ggo & ~vesselWalls;
+%% 3. Large vessel lumen cleanup and masking
+fprintf('    Masking pathology with large vessel lumen...\n');
 
 % Remove large vessels from airway walls, airways, far region
 largeVessels = largeVessels & ~airwayWalls;
 largeVessels = largeVessels & ~airways;
 largeVessels = largeVessels & ~distanceMasks.far;
 largeVessels = bwareaopen(largeVessels, 30, 6);
+
+dense = dense & ~largeVessels;
+ggo   = ggo   & ~largeVessels;
 
 %% 5. Reclassify healthy tissue with HU above threshold
 fprintf('    Reclassifying high-HU healthy tissue as pathological...\n');
@@ -109,6 +104,7 @@ healthy(ggo ~= 0) = 0;
 healthy(dense ~= 0) = 0;
 healthy(airSeg ~= 0) = 0;
 healthy(vessels ~= 0) = 0;
+healthy(largeVessels ~= 0) = 0;
 healthy(airways ~= 0) = 0;
 healthy(airwayWalls ~= 0) = 0;
 if any(trachea(:))
@@ -117,8 +113,12 @@ end
 healthy(tracheaWalls ~= 0) = 0;
 
 % Healthy voxels above healthyMaxHU → pathological
+% Exclude voxels within 1 voxel of vessel borders (partial volume guard)
 ct = volumes.ct;
-healthyToInjury = logical(healthy) & (ct > params.thresholds.healthyMaxHU);
+[vesselBorderDist, ~] = bwdist(vessels | largeVessels);
+healthyToInjury = logical(healthy) & (ct > params.thresholds.healthyMaxHU) ...
+    & (vesselBorderDist > fp.vesselGuardDist);
+clear vesselBorderDist;
 
 % Split reclassified voxels: GGO (≤ ggoMaxHU) vs Dense (> ggoMaxHU)
 ggo = ggo | (healthyToInjury & (ct <= params.thresholds.ggoMaxHU));
@@ -147,11 +147,9 @@ fibroticBands = uint8(fibroticBands .* roi);
 fibroticBands = logical(fibroticBands) & logical(healthy);
 fibroticBands = bwareaopen(fibroticBands, fb.minVol, 6);
 
-% Exclude large vessel mask region
-[largeVesselDistFB, ~] = bwdist(single(largeVessels));
-largeVesselMask = largeVesselDistFB < fp.vesselWalls.largeDist & largeVesselDistFB > 0;
-largeVesselMask = largeVesselMask | largeVessels;
-fibroticBands = fibroticBands & ~largeVesselMask;
+% Exclude vessel regions (small/medium + large)
+fibroticBands = fibroticBands & ~vessels;
+fibroticBands = fibroticBands & ~largeVessels;
 
 % Exclude fissure regions
 if any(fissures(:))
@@ -161,8 +159,17 @@ end
 % Add fibrotic bands to consolidation
 dense = dense | fibroticBands;
 
+%% 7. Final cleanup: size filter + morphological opening (GGO only)
+fprintf('    Final cleanup: size filter and GGO opening...\n');
+dense = bwareaopen(dense, fp.finalMinVol.dense, 6);
+ggo   = bwareaopen(ggo,   fp.finalMinVol.ggo,   6);
+
+% Morphological opening on GGO to remove thin shells and isolated voxels.
+% Not applied to dense: reticulations are thin structures that opening would damage.
+ggo = imopen(ggo, strel('sphere', 1));
+
 %% Output
-segs.vessels = vessels;
+segs.vessels = vessels | largeVessels;
 segs.airways = airways;
 segs.trachea = trachea;
 segs.dense = dense;
@@ -170,7 +177,6 @@ segs.ggo = ggo;
 segs.airSeg = airSeg;
 segs.airwayWalls = airwayWalls;
 segs.tracheaWalls = tracheaWalls;
-segs.vesselWalls = vesselWalls;
 
 fprintf('    Finalization complete\n');
 

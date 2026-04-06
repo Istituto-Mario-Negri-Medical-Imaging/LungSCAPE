@@ -44,9 +44,8 @@ function [g,nodenums] = binaryImageGraph3Weighted(map,conn)
 %   Based on binaryImageGraph3 - Copyright 2015 The MathWorks, Inc.
 %   Original author: Steve Eddins
 %   Weighted extension: Alberto Arrigoni
-requireR2015b
 % Input argument parsing and validation.
-bw = imbinarize(map,0.001);
+bw = imbinarize(double(map),0.001);
 validateattributes(bw,{'numeric','logical'},{'3d'});
 if ~islogical(bw)
    bw = (bw ~= 0);
@@ -55,7 +54,7 @@ default_conn = 26;
 if nargin < 2
    conn = default_conn;
 end
-conn = checkConnectivity(conn);
+conn = localCheckConnectivity(conn);
 % The connectivity array has already been verified to be symmetric
 % about its center element. Because we are making an undirected
 % graph, we don't need edges going in both directions, and so we
@@ -124,3 +123,36 @@ start = node_number_image(t.PixelIndices);
 finish = node_number_image(neighbor_indices);
 edge_table.EndNodes = [start(:) finish(:)];
 edge_table.Weight = sqrt(dx^2 + dy^2 + dz^2) * ones(height(t),1) + buffer;
+
+
+function conn = localCheckConnectivity(conn)
+% Inline replacement for checkConnectivity (Image Graphs toolbox).
+% Accepts scalar 6/18/26 or a 3-D logical array; returns a 3x3x3 array.
+if isnumeric(conn) && isscalar(conn)
+    switch conn
+        case 6
+            c = false(3,3,3);
+            c(2,2,1)=1; c(2,2,3)=1;  % z-neighbors
+            c(2,1,2)=1; c(2,3,2)=1;  % y-neighbors
+            c(1,2,2)=1; c(3,2,2)=1;  % x-neighbors
+            conn = c;
+        case 18
+            c = false(3,3,3);
+            % face neighbors (6)
+            c(2,2,1)=1; c(2,2,3)=1;
+            c(2,1,2)=1; c(2,3,2)=1;
+            c(1,2,2)=1; c(3,2,2)=1;
+            % edge neighbors (12): pairs of axes differ by 1
+            c(1,1,2)=1; c(1,3,2)=1; c(3,1,2)=1; c(3,3,2)=1;
+            c(1,2,1)=1; c(1,2,3)=1; c(3,2,1)=1; c(3,2,3)=1;
+            c(2,1,1)=1; c(2,1,3)=1; c(2,3,1)=1; c(2,3,3)=1;
+            conn = c;
+        case 26
+            conn = true(3,3,3);
+            conn(2,2,2) = false;
+        otherwise
+            error('Connectivity must be 6, 18, or 26.');
+    end
+elseif ~islogical(conn)
+    conn = logical(conn);
+end

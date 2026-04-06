@@ -144,13 +144,15 @@ def main():
     )
     parser.add_argument(
         "base_dir",
-        help="Base directory where ZIP, nnU-Net folders, INPUT and OUTPUT will be created",
+        nargs="?",
+        default=None,
+        help="Base directory where ZIP, nnU-Net folders, INPUT and OUTPUT will be created (default: current directory)",
     )
     args = parser.parse_args()
 
     validate_config()
 
-    base_dir = Path(args.base_dir).expanduser().resolve()
+    base_dir = Path(args.base_dir).expanduser().resolve() if args.base_dir else Path.cwd()
     base_dir.mkdir(parents=True, exist_ok=True)
 
     paths = create_project_dirs(base_dir)

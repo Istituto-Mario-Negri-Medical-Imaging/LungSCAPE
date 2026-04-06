@@ -3,8 +3,10 @@ function saveResults(results, patientData, params)
 %
 %   saveResults(results, patientData, params)
 %
-%   Saves all segmentation results including the total label map, regional
-%   maps, vessel classification, and processed CT volume in NRRD and MAT formats.
+%   Saves all segmentation results as NIfTI files (.nii.gz) sharing the same
+%   spatial header as the input CT. Output volumes are un-rotated before
+%   saving (inverting the 90-degree rotation applied in Step 2) so that they
+%   align perfectly with the input CT in any NIfTI-compatible viewer.
 %
 %   Inputs:
 %       results     - Structure with segmentation results:
@@ -16,25 +18,15 @@ function saveResults(results, patientData, params)
 %           .segmentsMapLR     - Left-Right regional map (uint8)
 %           .lobesVolume       - Lobe segmentation (uint8)
 %           .distalClass       - Distance classification (uint8)
-%           .ctProcessed       - Filtered CT volume (int16)
 %       patientData - Patient data structure from loadPatientData
 %       params      - Processing parameters structure
 %
 %   Output Files:
 %       <PatientFolder>/Results/
-%           - TotalLabelMap.nrrd     : Complete segmentation label map
-%           - VesselsLabelMap.nrrd   : Vessel diameter classification (1=large,2=medium,3=small)
-%           - VesselsTypeMap.nrrd    : Vessel type (1=artery, 2=vein, 3=undetermined)
-%           - Vol_<Patient>.nrrd     : Original/processed CT volume
-%           - <Patient>.mat          : MATLAB workspace with all variables
-%
-%   Spatial alignment:
-%       NRRD files are saved with the spatial origin from the input NIfTI header
-%       (params.voxel.origin). The 90-degree rotation applied during processing
-%       is inverted before saving so that NRRD outputs align correctly with the
-%       original CT NIfTI when overlaid in 3D Slicer or other viewers.
-%       The MAT workspace retains variables in the internal (rotated) coordinate
-%       frame used during processing.
+%           - TotalLabelMap.nii.gz      : Complete segmentation label map
+%           - VesselCalibreMap.nii.gz   : Vessel diameter classification (1=large,2=medium,3=small)
+%           - VesselsTypeMap.nii.gz     : Vessel type (1=artery, 2=vein, 3=undetermined)
+%           - <Patient>.mat             : MATLAB workspace with all variables
 %
 %   Label Map Values:
 %       0 - Background (outside lungs)
@@ -42,18 +34,17 @@ function saveResults(results, patientData, params)
 %       2 - Ground glass opacity (GGO)
 %       3 - Consolidation
 %       4 - Air trapping/cysts
-%       5 - Vessels (all; see VesselsTypeMap for artery/vein breakdown)
+%       5 - Vessels (all sizes incl. large hilar; see VesselsTypeMap for artery/vein breakdown)
 %       6 - Airways (bronchi)
 %       7 - Trachea
 %       8 - Airway walls
 %       9 - Trachea walls
-%      10 - Vessel walls
 %
 %   Example:
 %       results = processPatient(volumes, params);
 %       saveResults(results, patientData, params);
 %
-%   See also: loadPatientData, processPatient, nrrdWriter
+%   See also: loadPatientData, processPatient, load_untouch_nii, save_untouch_nii
 
 fprintf('Saving results for patient: %s\n', patientData.name);
 
@@ -64,57 +55,46 @@ if ~exist(outputDir, 'dir')
     fprintf('  Created output directory: %s\n', outputDir);
 end
 
-%% Undo internal 90-degree rotation before saving NRRD outputs
+%% Load CT NIfTI as spatial header template
+% All outputs will share the same header as the input CT so that they are
+% perfectly aligned with the original scan in any NIfTI viewer.
+ctNii = load_untouch_nii(patientData.files.ct);
+
+%% Undo internal 90-degree rotation before saving
 %
 % During processing (LungScape Step 2) all volumes are rotated 90 degrees
-% around the z-axis (imrotate3, [0 0 1]) to bring them into a standard
-% processing orientation.  Before writing NRRD files we invert this rotation
-% so that the output data is back in the original NIfTI coordinate frame.
-% This allows the NRRD files to be correctly overlaid on the input CT NIfTI
-% in 3D Slicer and other viewers using the spatial origin stored in the header.
-%
-% 'nearest' interpolation is used to preserve integer label values exactly.
+% around the z-axis (imrotate3, [0 0 1]). Before saving we invert this
+% rotation with -90 degrees so the output data is back in the original
+% NIfTI coordinate frame.
+% 'nearest' interpolation preserves integer label values exactly.
 
-labelMapOut       = imrotate3(results.labelMap,       -90, [0 0 1], 'nearest', 'crop');
-vesselClassOut    = imrotate3(results.vesselClassified,-90, [0 0 1], 'nearest', 'crop');
-ctOut             = imrotate3(results.ctProcessed,     -90, [0 0 1], 'nearest', 'crop');
+labelMapOut    = imrotate3(results.labelMap,        -90, [0 0 1], 'nearest', 'crop');
+vesselClassOut = imrotate3(results.vesselClassified, -90, [0 0 1], 'nearest', 'crop');
 if isfield(results, 'vesselType')
-    vesselTypeOut = imrotate3(results.vesselType,      -90, [0 0 1], 'nearest', 'crop');
+    vesselTypeOut = imrotate3(results.vesselType,   -90, [0 0 1], 'nearest', 'crop');
 end
 
-origin = params.voxel.origin;
-
-%% Save Total Label Map (NRRD)
+%% Save Total Label Map
 fprintf('  Saving total label map...\n');
-labelMapFile = fullfile(outputDir, 'TotalLabelMap.nrrd');
-nrrdWriter(labelMapFile, uint8(labelMapOut), ...
-    params.voxel.dimensions, origin, 'raw');
+labelMapFile = fullfile(outputDir, 'TotalLabelMap.nii.gz');
+saveNifti(ctNii, uint8(labelMapOut), labelMapFile);
 
-%% Save Vessel Classification Label Map (NRRD)
-fprintf('  Saving vessel classification label map...\n');
-vesselMapFile = fullfile(outputDir, 'VesselsLabelMap.nrrd');
-nrrdWriter(vesselMapFile, uint8(vesselClassOut), ...
-    params.voxel.dimensions, origin, 'raw');
+%% Save Vessel Calibre Map
+fprintf('  Saving vessel calibre map...\n');
+vesselMapFile = fullfile(outputDir, 'VesselCalibreMap.nii.gz');
+saveNifti(ctNii, uint8(vesselClassOut), vesselMapFile);
 
-%% Save Vessel Type Map (NRRD)
+%% Save Vessel Type Map
 if isfield(results, 'vesselType')
     fprintf('  Saving vessel type map (artery/vein)...\n');
-    vesselTypeFile = fullfile(outputDir, 'VesselsTypeMap.nrrd');
-    nrrdWriter(vesselTypeFile, uint8(vesselTypeOut), ...
-        params.voxel.dimensions, origin, 'raw');
+    vesselTypeFile = fullfile(outputDir, 'VesselsTypeMap.nii.gz');
+    saveNifti(ctNii, uint8(vesselTypeOut), vesselTypeFile);
 end
-
-%% Save Processed CT Volume (NRRD)
-fprintf('  Saving CT volume...\n');
-ctFile = fullfile(outputDir, sprintf('Vol_%s.nrrd', patientData.name));
-nrrdWriter(ctFile, int16(ctOut), ...
-    params.voxel.dimensions, origin, 'raw');
 
 %% Save MATLAB Workspace
 fprintf('  Saving MATLAB workspace...\n');
 matFile = fullfile(outputDir, sprintf('%s.mat', patientData.name));
 
-% Prepare variables to save
 saveVars = struct();
 saveVars.TotalLabelMap = results.labelMap;
 saveVars.Vessels_classified = results.vesselClassified;
@@ -140,7 +120,6 @@ if ~isempty(results.lobesVolume)
     saveVars.LobesVolume = results.lobesVolume;
 end
 
-% Save to MAT file
 save(matFile, '-struct', 'saveVars', '-v7.3');
 
 fprintf('  Results saved successfully to: %s\n\n', outputDir);
@@ -150,8 +129,31 @@ displaySummaryStatistics(results, params);
 
 end
 
-%% Helper Function
 
+%% Helper: Save a volume as NIfTI reusing the CT header
+function saveNifti(templateNii, imgData, filepath)
+%SAVENIFTI Save a volume as NIfTI using a template header.
+%
+%   The template header is copied verbatim (preserving sform/qform,
+%   origin, voxel spacing, etc.) and only the data-type fields and image
+%   data are replaced. This guarantees spatial alignment with the input CT.
+
+nii = templateNii;
+nii.img = imgData;
+
+% Update data-type fields for uint8 label maps
+nii.hdr.dime.datatype = 2;    % DT_UINT8
+nii.hdr.dime.bitpix   = 8;
+nii.hdr.dime.scl_slope = 1;
+nii.hdr.dime.scl_inter = 0;
+nii.hdr.dime.cal_max  = double(max(imgData(:)));
+nii.hdr.dime.cal_min  = 0;
+
+save_untouch_nii(nii, filepath);
+end
+
+
+%% Helper: Display summary statistics
 function displaySummaryStatistics(results, params)
 %DISPLAYSUMMARYSTATISTICS Display summary of segmentation results
 

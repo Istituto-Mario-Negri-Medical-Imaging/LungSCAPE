@@ -51,36 +51,73 @@ function vesselsSeg = segmentVessels(volumes, lungsProcessed, airwaysSeg, injury
 
 fprintf('  Segmenting pulmonary vessels...\n');
 
-%% Apply Jerman vesselness filter on vessels preliminary segmentation
-fprintf('    Applying Jerman vesselness filter...\n');
+%% Apply Jerman vesselness filter — separate runs for arteries and veins
+fprintf('    Applying Jerman vesselness filter (separate artery/vein runs)...\n');
 
-% Jerman filter with multiple scales to capture vessels of different sizes
-% Scales: 0.5, 1.0, 1.5 mm capture small to medium vessels
-% The last parameter (true) specifies the "Jerman" mode
-vesselnessEnhanced = vesselness3D(volumes.vessels, ...
-    params.vessels.jerman.scales, ...
-    [params.voxel.px; params.voxel.py; params.voxel.vz], ...
-    params.vessels.jerman.tau, ...
-    params.vessels.jerman.useBright);  % true = Jerman mode
+% Two independent Jerman filter runs preserve the type identity of each
+% vascular system before any morphological operation can fuse them.
+% Running on the combined binary (arteries|veins) would produce a single
+% anonymous vesselness map where the two systems are indistinguishable from
+% the first processing step onward.
+% The per-voxel maximum is used as the combined vesselness map for all
+% downstream operations that require a single response (thresholding,
+% pathological zone refinement, output field).
+jermanSpacing = [params.voxel.px; params.voxel.py; params.voxel.vz];
 
+vesselness_art  = vesselness3D(volumes.arteries, ...
+    params.vessels.jerman.scales, jermanSpacing, ...
+    params.vessels.jerman.tau, params.vessels.jerman.useBright);
+
+vesselness_vein = vesselness3D(volumes.veins, ...
+    params.vessels.jerman.scales, jermanSpacing, ...
+    params.vessels.jerman.tau, params.vessels.jerman.useBright);
+
+% Per-voxel maximum: used wherever a single vesselness map is needed
+vesselnessEnhanced = max(vesselness_art, vesselness_vein);
 vesselsSeg.vesselness = vesselnessEnhanced;
 
-%% Threshold vesselness response
-fprintf('    Thresholding vesselness response...\n');
+%% Threshold and separate mediastinal reconstruction
+fprintf('    Thresholding and reconstructing artery/vein paths separately...\n');
 
-% Initial binary segmentation from vesselness
-vesselsRawThreshold = vesselnessEnhanced > params.vessels.threshold.initial;
+% Separate raw thresholds
+rawThreshold_art  = vesselness_art  > params.vessels.threshold.initial;
+rawThreshold_vein = vesselness_vein > params.vessels.threshold.initial;
 
-% Save the raw threshold before reconstruction (needed for post-trachea refinement)
-vesselsSeg.rawThreshold = vesselsRawThreshold;
+% Combined raw threshold preserved for post-trachea vessel refinement
+vesselsSeg.rawThreshold = rawThreshold_art | rawThreshold_vein;
 
-% Reconstruct vessels branching from the mediastinal region
-% Dilate the "close" mask slightly to serve as seeds
+% Separate mediastinal reconstructions.
+% Each system is reconstructed independently from the same seed mask,
+% preventing the two vascular trees from being fused at this earliest step.
 seedMask = imdilate(distanceMasks.close, strel('sphere', 3));
-vesselsInitialSeg = imreconstruct(seedMask, vesselsRawThreshold, 26);
 
-% Store initial segmentation (after reconstruction)
+vessel_art_prelim  = logical(imreconstruct(seedMask, rawThreshold_art,  26));
+vessel_vein_prelim = logical(imreconstruct(seedMask, rawThreshold_vein, 26));
+
+% Combined preliminary binary for all downstream steps (interface unchanged)
+vesselsInitialSeg = vessel_art_prelim | vessel_vein_prelim;
 vesselsSeg.preliminary = vesselsInitialSeg;
+
+%% Generate per-voxel type prior (typeMapJerman)
+% Labels each voxel of the preliminary binary with the vascular type derived
+% from the Jerman filter response. Voxels reached only by one reconstruction
+% are unambiguous; voxels reached by both are resolved by whichever response
+% is stronger at that location.
+% Passed to classifyVesselsByType as an additional anchor source alongside
+% the TS masks, providing type labels based on filter response rather than
+% TS mask spatial proximity alone.
+typeMapJerman = zeros(size(vesselsInitialSeg), 'uint8');
+typeMapJerman(vessel_art_prelim  & ~vessel_vein_prelim) = 1;   % artery only
+typeMapJerman(vessel_vein_prelim & ~vessel_art_prelim)  = 2;   % vein only
+
+overlap = vessel_art_prelim & vessel_vein_prelim;
+typeMapJerman(overlap & (vesselness_art >= vesselness_vein)) = 1;
+typeMapJerman(overlap & (vesselness_art <  vesselness_vein)) = 2;
+
+vesselsSeg.typeMapJerman = typeMapJerman;
+
+% Free per-type intermediates (combined map is retained in vesselsSeg.vesselness)
+clear vesselness_art vesselness_vein vessel_art_prelim vessel_vein_prelim overlap;
 
 %% Extract skeleton and diameter information
 fprintf('    Computing vessel diameter map...\n');

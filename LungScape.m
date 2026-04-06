@@ -37,17 +37,15 @@
 %
 % Output:
 %   <PatientFolder>/Results/
-%   ├── TotalLabelMap.nrrd      - Complete segmentation (labels 0-10)
-%   ├── VesselsLabelMap.nrrd    - Vessel diameter classification (1=large, 2=medium, 3=small)
-%   ├── VesselsTypeMap.nrrd     - Vessel type (1=artery, 2=vein, 3=undetermined)
-%   ├── Vol_<Patient>.nrrd      - Processed CT volume
+%   ├── TotalLabelMap.nii.gz    - Complete segmentation (labels 0-9)
+%   ├── VesselCalibreMap.nii.gz - Vessel diameter classification (1=large, 2=medium, 3=small)
+%   ├── VesselsTypeMap.nii.gz   - Vessel type (1=artery, 2=vein, 3=undetermined)
 %   └── <Patient>.mat           - MATLAB workspace with all results
 %
 % Dependencies:
-%   - NIfTI toolbox (load_untouch_nii)
+%   - NIfTI toolbox (load_untouch_nii, save_untouch_nii)
 %   - anisodiff3D (anisotropic diffusion filtering)
 %   - vesselness3D (Jerman vessel enhancement)
-%   - nrrdWriter (NRRD file export)
 %
 % Author: Alberto Arrigoni, Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 %
@@ -61,7 +59,7 @@ clear
 addpath(genpath(pwd));
 
 %% Configuration
-DATA_DIRECTORY = '/mnt/sdb1/lungs_longitudinale/LungScapeTEST/DATA2';
+DATA_DIRECTORY = 'path/to/DATA';
 N_WORKERS      = 3;   % Parallel pool size (parfor workers)
 
 %% Start logging
@@ -73,8 +71,17 @@ diary(logFile);
 diary on;
 
 %% Load patient dataset
-fprintf('========================================================================\n');
+fprintf('=========================================================================\n');
 fprintf('  LungScape - Lung Segmentation: Comprehensive & Automatic PipelinE\n');
+fprintf('=========================================================================\n\n');
+fprintf('  LungSCAPE was developed by Alberto Arrigoni,\n');
+fprintf('  Istituto di Ricerche Farmacologiche Mario Negri (IRCCS).\n\n');
+fprintf('  If you use LungScape in your work, find it useful for your\n');
+fprintf('  research, or build upon it for further development, please cite\n');
+fprintf('  the corresponding publication:\n');
+fprintf('    Arrigoni, A. et al. Radiol med (2025).\n');
+fprintf('    https://doi.org/10.1007/s11547-025-02166-w\n');
+fprintf('  and the GitHub repository.\n');
 fprintf('=========================================================================\n\n');
 
 %% 1 - Load patient data
@@ -137,11 +144,11 @@ function processPatient(patientData, nWorkers)
 %   See also: loadPatientVolumes, getProcessingParameters, saveResults
 
     %% Skip if already processed
-    % TotalLabelMap.nrrd is written last by saveResults — its presence means
+    % TotalLabelMap.nii.gz is written last by saveResults — its presence means
     % the full pipeline completed successfully for this patient.
     % Delete or rename Results/ to force re-processing.
-    if exist(fullfile(patientData.folder, 'Results', 'TotalLabelMap.nrrd'), 'file')
-        fprintf('  Results already exist (Results/TotalLabelMap.nrrd found) — skipping.\n');
+    if exist(fullfile(patientData.folder, 'Results', 'TotalLabelMap.nii.gz'), 'file')
+        fprintf('  Results already exist (Results/TotalLabelMap.nii.gz found) — skipping.\n');
         fprintf('  To re-process, delete or rename the Results/ folder.\n\n');
         return;
     end
@@ -249,7 +256,6 @@ function processPatient(patientData, nWorkers)
     fprintf('----------------------------------------\n');
     injurySeg = segmentInjuries(volumes,  lungsProcessed, airwaysSeg, params);
     results.injuries = injurySeg;
-    % REVISE BRIGHTNESS MAPPING APPROACH AND SEPARATION BETWEEN GGO AND CONSOLIDATION
     stepTimes.step07 = toc(tStep);
     fprintf('  [Step 7 completed in %.1f s]\n\n', stepTimes.step07);
 
@@ -315,8 +321,11 @@ function processPatient(patientData, nWorkers)
     fprintf('----------------------------------------\n');
 
     % Prepare inputs for finalization
+    % Vessel guard zone: dilate by 1 voxel to remove partial-volume shells
+    vesselsGuard = imdilate(vesselsRefined, strel('sphere', 1));
+
     denseSeg = injurySeg.dense;
-    denseSeg = denseSeg & ~vesselsRefined;
+    denseSeg = denseSeg & ~vesselsGuard;
     denseSeg = denseSeg & ~airwaysSeg.airways;
     denseSeg = bwareaopen(denseSeg, 20, 6);
 
@@ -325,9 +334,11 @@ function processPatient(patientData, nWorkers)
 
     ggoSeg = injurySeg.ggo;
     ggoSeg = ggoSeg & ~denseSeg;
-    ggoSeg = ggoSeg & ~vesselsRefined;
+    ggoSeg = ggoSeg & ~vesselsGuard;
     ggoSeg = ggoSeg & ~airwaysSeg.airways;
     ggoSeg = bwareaopen(ggoSeg, 30, 6);
+
+    clear vesselsGuard;
 
     trachea = [];
     if isfield(airwaysSeg, 'trachea')
@@ -358,7 +369,8 @@ function processPatient(patientData, nWorkers)
     fprintf('----------------------------------------\n');
     fprintf('STEP 13b: Classifying vessels by type...\n');
     fprintf('----------------------------------------\n');
-    vesselTypeMap = classifyVesselsByType(segs.vessels, volumes.arteries, volumes.veins, params);
+    vesselTypeMap = classifyVesselsByType(segs.vessels, volumes.arteries, volumes.veins, params, ...
+        vesselsSeg.typeMapJerman);
     results.vesselType = vesselTypeMap;
     stepTimes.step13b = toc(tStep);
     fprintf('  [Step 13b completed in %.1f s]\n\n', stepTimes.step13b);
@@ -390,7 +402,6 @@ function processPatient(patientData, nWorkers)
     segmentations.ggo = segs.ggo;
     segmentations.air = segs.airSeg;
     segmentations.airwayWalls = segs.airwayWalls;
-    segmentations.vesselWalls = segs.vesselWalls;
     segmentations.tracheaWalls = segs.tracheaWalls;
 
     totalLabelMap = createLabelMap(segmentations, lungsProcessed.binary);

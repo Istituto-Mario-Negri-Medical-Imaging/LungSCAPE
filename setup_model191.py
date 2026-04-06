@@ -14,7 +14,7 @@ from urllib.request import urlretrieve
 # CONFIGURATION (EDIT HERE)
 
 # Set the direct URL to the pretrained nnU-Net v2 model ZIP file.
-MODEL_URL = "https://zenodo.org/records/18755058/files/Dataset191_HighAttenuation.zip?download=1"
+MODEL_URL = "https://zenodo.org/records/18860414/files/Dataset191_HighAttenuation.zip?download=1"
 
 # =========================
 
@@ -144,13 +144,15 @@ def main():
     )
     parser.add_argument(
         "base_dir",
-        help="Base directory where ZIP, nnU-Net folders, INPUT and OUTPUT will be created",
+        nargs="?",
+        default=None,
+        help="Base directory where ZIP, nnU-Net folders, INPUT and OUTPUT will be created (default: current directory)",
     )
     args = parser.parse_args()
 
     validate_config()
 
-    base_dir = Path(args.base_dir).expanduser().resolve()
+    base_dir = Path(args.base_dir).expanduser().resolve() if args.base_dir else Path.cwd()
     base_dir.mkdir(parents=True, exist_ok=True)
 
     paths = create_project_dirs(base_dir)
@@ -193,7 +195,7 @@ def main():
         else:
             print(f'  Bash/Zsh:    source "{activation_script}"')
         
-        print("  execture run_model191.py to perform the segmentation")
+        print("  Execute run_model191.py to perform the segmentation")
         
     except Exception as e:
         err(str(e))

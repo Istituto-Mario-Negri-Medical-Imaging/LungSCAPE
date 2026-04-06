@@ -196,8 +196,8 @@ smooth = lungblur./roilungs;
 dense = 255.*(ImSrc <=(smooth-params.injury.adaptiveThresholdSep));
 dense = uint8(dense.*(ROI>0));
 dense(injury==0)=0;
-dense = bwareaopen(dense,6,8); % REVISE
-dense = bwareaopen(dense,35,6); % REVISE
+dense = bwareaopen(dense, params.injury.denseMinSize8, 8);
+dense = bwareaopen(dense, params.injury.denseMinSize6, 6);
 ggo = injury & ~dense;
 
 injurySeg.dense = dense;
