@@ -290,7 +290,8 @@ python run_TotalSegmentator.py --data-dir <output_dir>/DATA --use-ts-airways
 
 ### Step 2 - Python Preprocessing: nnU-Net Airways Model (Model201)
 
-This step segments airways using a pretrained nnU-Net v2 model (Dataset201). This is the **default** airways source. Skip this step only if you ran Step 1 with `--use-ts-airways`.
+This step segments airways using a pretrained nnU-Net v2 model (Dataset201) - "Arrigoni, A. (2026). LungSCAPE_Airways201. Zenodo. https://doi.org/10.5281/zenodo.18860421"
+This is the **default** airways source. Skip this step only if you ran Step 1 with `--use-ts-airways`.
 
 **2a. Setup the model (first time only):**
 
@@ -325,7 +326,8 @@ python run_model201.py <model201_base_dir> --project-dir <output_dir> --no-clean
 
 ### Step 3 - Python Preprocessing: nnU-Net High Attenuation Model (Model191)
 
-This step segments high attenuation abnormalities (consolidations, dense opacities) using a pretrained nnU-Net v2 model (Dataset191). The pipeline is designed for patients with lung pathology, so this step is run by default. It can be skipped with `--skip-model191` in `run_pipeline.sh` if the cohort has no significant high attenuation findings.
+This step segments high attenuation abnormalities (consolidations, dense opacities) using a pretrained nnU-Net v2 model (Dataset191) - "Arrigoni, A. (2026). LungSCAPE_HighAttenuation191. Zenodo. https://doi.org/10.5281/zenodo.18860414"
+The pipeline is designed for patients with lung pathology, so this step is run by default. It can be skipped with `--skip-model191` in `run_pipeline.sh` if the cohort has no significant high attenuation findings.
 
 **3a. Setup the model (first time only):**
 
