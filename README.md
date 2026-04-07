@@ -471,7 +471,6 @@ Vessel diameter classification based on the BV5/BV10 framework (Estépar et al.,
 
 | Label | Type |
 |-------|------|
-| 0 | Not a vessel |
 | 1 | Artery |
 | 2 | Vein |
 | 3 | Undetermined |
