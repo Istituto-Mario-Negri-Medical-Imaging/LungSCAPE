@@ -116,8 +116,8 @@ Install with:
 pip install -r requirements.txt
 ```
 
-| Package | Version | Purpose |
-|---------|---------|---------|
+| Package |  Version  | Purpose |
+|---------|-----------|---------|
 | TotalSegmentator | >= 2.13.0 | Lung, lobe, artery/vein/airway segmentation (separate outputs require v2.13.0+) |
 | nibabel | >= 4.0 | NIfTI file I/O |
 | numpy | >= 1.21 | Array operations |
