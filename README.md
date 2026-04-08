@@ -8,6 +8,10 @@
 
 Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
+## Citation
+
+If you use LungSCAPE in your work, find it useful for your research, or build upon it for further development, please cite the corresponding publication: "Arrigoni, A. et al. Radiol med (2025)." - https://doi.org/10.1007/s11547-025-02166-w and the GitHub repository.
+
 ## Overview
 
 LungSCAPE is a two-stage hybrid pipeline for comprehensive segmentation of lung structures from pathological chest HRCT scans. 
@@ -508,10 +512,6 @@ All processing hyperparameters are centralized in `config/getProcessingParameter
 | **Morphology** | Structuring element sizes (voxel-aware, auto-adjusted for scanner resolution) |
 
 > **Note:** The current parameter values were defined empirically and validated on the datasets described in the reference publication. Different scanner models, acquisition protocols, reconstruction kernels, or patient populations may require adjustments. All parameters are collected in a single file (`getProcessingParameters.m`) to make such tuning straightforward — users are encouraged to review and adapt them to their own data.
-
-## Citation
-
-If you use LungSCAPE in your work, find it useful for your research, or build upon it for further development, please cite the corresponding publication: "Arrigoni, A. et al. Radiol med (2025)." - https://doi.org/10.1007/s11547-025-02166-w and the GitHub repository.
 
 ## License
 Apache-2.0 license
