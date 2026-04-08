@@ -10,7 +10,7 @@ Alberto Arrigoni - Istituto di Ricerche Farmacologiche Mario Negri IRCCS
 
 ## Citation
 
-If you use LungSCAPE in your work, find it useful for your research, or build upon it for further development, please cite the corresponding publication: "Arrigoni, A. et al. Radiol med (2025)." - https://doi.org/10.1007/s11547-025-02166-w and the GitHub repository.
+If you use LungSCAPE in your work, find it useful for your research, or build upon it for further development, please cite the corresponding publication: "Arrigoni, A., Pennati, F., Bonaffini, P.A. et al. Advanced lung segmentation on chest HRCT: comprehensive pipeline for quantification of airways, vessels, and injury patterns. Radiol med (2025). https://doi.org/10.1007/s11547-025-02166-w", and the GitHub repository.
 
 ## Overview
 
